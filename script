@@ -1,0 +1,196 @@
+-- LocalScript
+-- Put this in StarterPlayer > StarterPlayerScripts
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local teamRequest = ReplicatedStorage.Shared.Remotes.TeamRequest
+
+local selectedTeam = "Attackers"
+local spamInterval = 0.1
+local running = false
+
+-- GUI
+local gui = Instance.new("ScreenGui")
+gui.Name = "TeamJoinGUI"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(260, 155)
+frame.Position = UDim2.new(0.5, -130, 0.5, -77)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+frame.BorderSizePixel = 0
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = frame
+
+-- Title
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 35)
+title.BackgroundTransparency = 1
+title.Text = "AUTO TEAM JOIN"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 16
+title.Font = Enum.Font.GothamBold
+title.Parent = frame
+
+-- Team button
+local teamButton = Instance.new("TextButton")
+teamButton.Size = UDim2.new(1, -30, 0, 35)
+teamButton.Position = UDim2.fromOffset(15, 40)
+teamButton.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+teamButton.Text = "Team: Attackers"
+teamButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+teamButton.TextSize = 14
+teamButton.Font = Enum.Font.GothamMedium
+teamButton.Parent = frame
+
+local teamCorner = Instance.new("UICorner")
+teamCorner.CornerRadius = UDim.new(0, 7)
+teamCorner.Parent = teamButton
+
+teamButton.MouseButton1Click:Connect(function()
+	if selectedTeam == "Attackers" then
+		selectedTeam = "Defenders"
+	else
+		selectedTeam = "Attackers"
+	end
+
+	teamButton.Text = "Team: " .. selectedTeam
+end)
+
+-- Slider background
+local slider = Instance.new("Frame")
+slider.Size = UDim2.new(1, -30, 0, 6)
+slider.Position = UDim2.fromOffset(15, 92)
+slider.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+slider.BorderSizePixel = 0
+slider.Parent = frame
+
+local sliderCorner = Instance.new("UICorner")
+sliderCorner.CornerRadius = UDim.new(1, 0)
+sliderCorner.Parent = slider
+
+local knob = Instance.new("TextButton")
+knob.Size = UDim2.fromOffset(14, 14)
+knob.Position = UDim2.new(0.5, -7, 0.5, -7)
+knob.Text = ""
+knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+knob.BorderSizePixel = 0
+knob.Parent = slider
+
+local knobCorner = Instance.new("UICorner")
+knobCorner.CornerRadius = UDim.new(1, 0)
+knobCorner.Parent = knob
+
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(1, -30, 0, 20)
+speedLabel.Position = UDim2.fromOffset(15, 105)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Interval: 0.10s"
+speedLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
+speedLabel.TextSize = 12
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = frame
+
+-- Start button
+local startButton = Instance.new("TextButton")
+startButton.Size = UDim2.new(1, -30, 0, 28)
+startButton.Position = UDim2.fromOffset(15, 125)
+startButton.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+startButton.Text = "START"
+startButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+startButton.TextSize = 12
+startButton.Font = Enum.Font.GothamBold
+startButton.Parent = frame
+
+local startCorner = Instance.new("UICorner")
+startCorner.CornerRadius = UDim.new(0, 6)
+startCorner.Parent = startButton
+
+-- Slider logic
+local UserInputService = game:GetService("UserInputService")
+local dragging = false
+
+local function updateSlider(x)
+	local left = slider.AbsolutePosition.X
+	local width = slider.AbsoluteSize.X
+
+	local percent = math.clamp((x - left) / width, 0, 1)
+
+	knob.Position = UDim2.new(percent, -7, 0.5, -7)
+
+	-- 0.05s -> 1.00s
+	spamInterval = 0.05 + (percent * 0.95)
+
+	speedLabel.Text = string.format("Interval: %.2fs", spamInterval)
+end
+
+knob.MouseButton1Down:Connect(function()
+	dragging = true
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		updateSlider(input.Position.X)
+	end
+end)
+
+-- Reset slider
+local function resetSlider()
+	spamInterval = 0.1
+
+	knob.Position = UDim2.new(0.5, -7, 0.5, -7)
+	speedLabel.Text = "Interval: 0.10s"
+end
+
+-- Auto join
+local function autoJoin()
+	if running then
+		return
+	end
+
+	running = true
+	startButton.Text = "JOINING..."
+
+	task.spawn(function()
+		while running do
+			-- Already on selected team
+			if player.Team and player.Team.Name == selectedTeam then
+				running = false
+				startButton.Text = "JOINED!"
+				resetSlider()
+
+				task.wait(0.5)
+
+				startButton.Text = "START"
+				break
+			end
+
+			-- Request selected team
+			teamRequest:FireServer(selectedTeam)
+
+			task.wait(spamInterval)
+		end
+	end)
+end
+
+startButton.MouseButton1Click:Connect(function()
+	if running then
+		running = false
+		startButton.Text = "START"
+	else
+		autoJoin()
+	end
+end)
