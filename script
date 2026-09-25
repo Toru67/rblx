@@ -3,23 +3,31 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
+
 local teamRequest = ReplicatedStorage.Shared.Remotes.TeamRequest
+local troopRequest = ReplicatedStorage.Shared.Remotes.RespawnUnitRequest
 
 local selectedTeam = "Attackers"
+local selectedTroop = 1
+
 local spamInterval = 0.1
 local running = false
 
+--------------------------------------------------
 -- GUI
+--------------------------------------------------
+
 local gui = Instance.new("ScreenGui")
 gui.Name = "TeamJoinGUI"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(260, 155)
-frame.Position = UDim2.new(0.5, -130, 0.5, -77)
+frame.Size = UDim2.fromOffset(260, 235)
+frame.Position = UDim2.new(0.5, -130, 0.5, -117)
 frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 frame.BorderSizePixel = 0
 frame.Parent = gui
@@ -28,7 +36,10 @@ local corner = Instance.new("UICorner")
 corner.CornerRadius = UDim.new(0, 10)
 corner.Parent = frame
 
--- Title
+--------------------------------------------------
+-- Title / Drag area
+--------------------------------------------------
+
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 35)
 title.BackgroundTransparency = 1
@@ -38,7 +49,10 @@ title.TextSize = 16
 title.Font = Enum.Font.GothamBold
 title.Parent = frame
 
+--------------------------------------------------
 -- Team button
+--------------------------------------------------
+
 local teamButton = Instance.new("TextButton")
 teamButton.Size = UDim2.new(1, -30, 0, 35)
 teamButton.Position = UDim2.fromOffset(15, 40)
@@ -63,10 +77,41 @@ teamButton.MouseButton1Click:Connect(function()
 	teamButton.Text = "Team: " .. selectedTeam
 end)
 
--- Slider background
+--------------------------------------------------
+-- Troop selector
+--------------------------------------------------
+
+local troopButton = Instance.new("TextButton")
+troopButton.Size = UDim2.new(1, -30, 0, 35)
+troopButton.Position = UDim2.fromOffset(15, 80)
+troopButton.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+troopButton.Text = "Troop: 1"
+troopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+troopButton.TextSize = 14
+troopButton.Font = Enum.Font.GothamMedium
+troopButton.Parent = frame
+
+local troopCorner = Instance.new("UICorner")
+troopCorner.CornerRadius = UDim.new(0, 7)
+troopCorner.Parent = troopButton
+
+troopButton.MouseButton1Click:Connect(function()
+	selectedTroop += 1
+
+	if selectedTroop > 3 then
+		selectedTroop = 1
+	end
+
+	troopButton.Text = "Troop: " .. selectedTroop
+end)
+
+--------------------------------------------------
+-- Slider
+--------------------------------------------------
+
 local slider = Instance.new("Frame")
 slider.Size = UDim2.new(1, -30, 0, 6)
-slider.Position = UDim2.fromOffset(15, 92)
+slider.Position = UDim2.fromOffset(15, 128)
 slider.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
 slider.BorderSizePixel = 0
 slider.Parent = frame
@@ -89,7 +134,7 @@ knobCorner.Parent = knob
 
 local speedLabel = Instance.new("TextLabel")
 speedLabel.Size = UDim2.new(1, -30, 0, 20)
-speedLabel.Position = UDim2.fromOffset(15, 105)
+speedLabel.Position = UDim2.fromOffset(15, 140)
 speedLabel.BackgroundTransparency = 1
 speedLabel.Text = "Interval: 0.10s"
 speedLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
@@ -98,10 +143,13 @@ speedLabel.Font = Enum.Font.Gotham
 speedLabel.TextXAlignment = Enum.TextXAlignment.Left
 speedLabel.Parent = frame
 
+--------------------------------------------------
 -- Start button
+--------------------------------------------------
+
 local startButton = Instance.new("TextButton")
 startButton.Size = UDim2.new(1, -30, 0, 28)
-startButton.Position = UDim2.fromOffset(15, 125)
+startButton.Position = UDim2.fromOffset(15, 170)
 startButton.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
 startButton.Text = "START"
 startButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -113,9 +161,26 @@ local startCorner = Instance.new("UICorner")
 startCorner.CornerRadius = UDim.new(0, 6)
 startCorner.Parent = startButton
 
+--------------------------------------------------
+-- K KEYBIND TEXT
+--------------------------------------------------
+
+local keybindText = Instance.new("TextLabel")
+keybindText.Size = UDim2.fromOffset(100, 18)
+keybindText.Position = UDim2.new(1, -110, 1, -22)
+keybindText.BackgroundTransparency = 1
+keybindText.Text = "K to open/close"
+keybindText.TextColor3 = Color3.fromRGB(120, 120, 130)
+keybindText.TextSize = 10
+keybindText.Font = Enum.Font.Gotham
+keybindText.TextXAlignment = Enum.TextXAlignment.Right
+keybindText.Parent = frame
+
+--------------------------------------------------
 -- Slider logic
-local UserInputService = game:GetService("UserInputService")
-local dragging = false
+--------------------------------------------------
+
+local draggingSlider = false
 
 local function updateSlider(x)
 	local left = slider.AbsolutePosition.X
@@ -125,29 +190,34 @@ local function updateSlider(x)
 
 	knob.Position = UDim2.new(percent, -7, 0.5, -7)
 
-	-- 0.05s -> 1.00s
 	spamInterval = 0.05 + (percent * 0.95)
 
-	speedLabel.Text = string.format("Interval: %.2fs", spamInterval)
+	speedLabel.Text = string.format(
+		"Interval: %.2fs",
+		spamInterval
+	)
 end
 
 knob.MouseButton1Down:Connect(function()
-	dragging = true
+	draggingSlider = true
 end)
 
 UserInputService.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		dragging = false
+		draggingSlider = false
 	end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+	if draggingSlider and input.UserInputType == Enum.UserInputType.MouseMovement then
 		updateSlider(input.Position.X)
 	end
 end)
 
+--------------------------------------------------
 -- Reset slider
+--------------------------------------------------
+
 local function resetSlider()
 	spamInterval = 0.1
 
@@ -155,7 +225,10 @@ local function resetSlider()
 	speedLabel.Text = "Interval: 0.10s"
 end
 
--- Auto join
+--------------------------------------------------
+-- Auto join + troop spawn
+--------------------------------------------------
+
 local function autoJoin()
 	if running then
 		return
@@ -165,32 +238,141 @@ local function autoJoin()
 	startButton.Text = "JOINING..."
 
 	task.spawn(function()
+
+		--------------------------------------------------
+		-- Step 1: Join selected team
+		--------------------------------------------------
+
 		while running do
-			-- Already on selected team
+
 			if player.Team and player.Team.Name == selectedTeam then
-				running = false
-				startButton.Text = "JOINED!"
-				resetSlider()
-
-				task.wait(0.5)
-
-				startButton.Text = "START"
 				break
 			end
 
-			-- Request selected team
 			teamRequest:FireServer(selectedTeam)
 
 			task.wait(spamInterval)
 		end
+
+		if not running then
+			return
+		end
+
+		--------------------------------------------------
+		-- Step 2: Spawn selected troop multiple times
+		--------------------------------------------------
+
+		local spawnAttempts = 6
+
+		for attempt = 1, spawnAttempts do
+
+			if not running then
+				return
+			end
+
+			startButton.Text = "SPAWNING... " .. attempt .. "/" .. spawnAttempts
+
+			troopRequest:FireServer(selectedTroop)
+
+			task.wait(0.5)
+		end
+
+		--------------------------------------------------
+		-- Step 3: Finished
+		--------------------------------------------------
+
+		running = false
+
+		startButton.Text = "DONE!"
+		resetSlider()
+
+		task.wait(0.7)
+
+		startButton.Text = "START"
 	end)
 end
 
+--------------------------------------------------
+-- Start / Stop
+--------------------------------------------------
+
 startButton.MouseButton1Click:Connect(function()
+
 	if running then
 		running = false
 		startButton.Text = "START"
 	else
 		autoJoin()
 	end
+
+end)
+
+--------------------------------------------------
+-- DRAGGING
+--------------------------------------------------
+
+local draggingFrame = false
+local dragStart
+local startPosition
+
+title.InputBegan:Connect(function(input)
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+		draggingFrame = true
+		dragStart = input.Position
+		startPosition = frame.Position
+
+	end
+
+end)
+
+title.InputEnded:Connect(function(input)
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		draggingFrame = false
+	end
+
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+
+	if not draggingFrame then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+
+		local delta = input.Position - dragStart
+
+		frame.Position = UDim2.new(
+			startPosition.X.Scale,
+			startPosition.X.Offset + delta.X,
+			startPosition.Y.Scale,
+			startPosition.Y.Offset + delta.Y
+		)
+
+	end
+
+end)
+
+--------------------------------------------------
+-- K KEY TO OPEN / CLOSE
+--------------------------------------------------
+
+local guiVisible = true
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+
+	if gameProcessed then
+		return
+	end
+
+	if input.KeyCode == Enum.KeyCode.K then
+
+		guiVisible = not guiVisible
+		frame.Visible = guiVisible
+
+	end
+
 end)
