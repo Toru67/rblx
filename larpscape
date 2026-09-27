@@ -1,0 +1,2984 @@
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ReplicatedFirst = game:GetService("ReplicatedFirst")
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local Lighting = game:GetService("Lighting")
+local SoundService = game:GetService("SoundService")
+local ContentProvider = game:GetService("ContentProvider")
+local plr = Players.LocalPlayer
+
+local Scope = {}
+Scope.__index = Scope
+function Scope.new()
+    return setmetatable({alive = true, cleanups = {}}, Scope)
+end
+function Scope:own(cleanup)
+    if self.alive then table.insert(self.cleanups, cleanup) else pcall(cleanup, false) end
+    return cleanup
+end
+function Scope:connect(signal, callback)
+    local connection = signal:Connect(function(...)
+        if self.alive then callback(...) end
+    end)
+    self:own(function() connection:Disconnect() end)
+    return connection
+end
+function Scope:patch(object, key, build)
+    local raw = rawget(object, key)
+    local original = object[key]
+    if type(original) ~= "function" then return false end
+    local replacement = build(original)
+    object[key] = replacement
+    self:own(function()
+        if object[key] == replacement then object[key] = raw end
+    end)
+    return true
+end
+function Scope:close(restore)
+    if not self.alive then return end
+    self.alive = false -- Invalidate first, before callbacks or game destructors run.
+    for i = #self.cleanups, 1, -1 do
+        local ok, err = xpcall(self.cleanups[i], debug.traceback, restore == true)
+        if not ok then warn("Larpscape cleanup: " .. tostring(err)) end
+    end
+    table.clear(self.cleanups)
+end
+
+local app = {
+    scope = Scope.new(), character = nil, characterScope = nil, movement = nil,
+    movementScope = nil, special = nil, specialID = nil, specialScope = nil, epoch = 0,
+    removed = setmetatable({}, {__mode = "k"}), jobs = {}, errors = {},
+    notify = nil, syncUI = nil, onSetting = nil, onSpiritLaunch = nil, status = "Starting...",
+}
+function app:report(key, err)
+    local now = os.clock()
+    if now - (self.errors[key] or -100) < 10 then return end
+    self.errors[key] = now
+    warn("Larpscape " .. key .. ": " .. tostring(err))
+end
+function app:run(key, callback, ...)
+    if not self.scope.alive then return end
+    local ok, result = pcall(callback, ...)
+    if not ok then self:report(key, result) end
+    return ok, result
+end
+function app:queue(key, callback, delay, characterBound)
+    if not self.scope.alive then return end
+    self.jobs[key] = {callback = callback, due = os.clock() + (delay or 0),
+        epoch = characterBound and self.epoch or nil}
+end
+function app:drainJobs()
+    local now = os.clock()
+    local batch = self.jobs
+    self.jobs = {}
+    for key, item in pairs(batch) do
+        if self.scope.alive and (item.epoch == nil or item.epoch == self.epoch) then
+            if item.due <= now then self:run(key, item.callback)
+            elseif not self.jobs[key] then self.jobs[key] = item end
+        end
+    end
+end
+function app:valid(movement)
+    if not self.scope.alive or not self.characterScope or not self.characterScope.alive then return false end
+    if not self.character or self.removed[self.character] or plr.Character ~= self.character
+        or not self.character.Parent then return false end
+    if not movement or movement.Character ~= self.character then return false end
+    local root, humanoid = movement.RootPart, movement.Humanoid
+    return root ~= nil and root:IsDescendantOf(self.character)
+        and humanoid ~= nil and humanoid.Parent == self.character and humanoid.Health > 0
+end
+function app:inRound()
+    local value = ReplicatedStorage:FindFirstChild("InRound")
+    return value ~= nil and value.Value == true and self:valid(self.movement)
+end
+local function child(parent, ...)
+    for _, name in ipairs({...}) do
+        parent = parent and parent:FindFirstChild(name)
+    end
+    return parent
+end
+local function import(source)
+    if not source or not source:IsA("ModuleScript") then return nil end
+    local ok, result = pcall(require, source)
+    if ok then return result end
+    app:report(source.Name, result)
+    return nil
+end
+local function finite(value)
+    return type(value) == "number" and value == value and math.abs(value) < math.huge
+end
+local function copy(value)
+    if type(value) ~= "table" then return value end
+    local result = {}
+    for key, item in pairs(value) do result[key] = copy(item) end
+    return result
+end
+
+
+local CONFIG_PATH = "Larpscape_config.json"
+local defaults = {
+    magnetRange = 1, evilGiftMagnet = false, kolonaAutoDestroy = false,
+    telefraggerAutoBreakAI = false, bellDistortionReduction = 0, bellBreakDistortion = false,
+    eBoostEnabled = false, eBoostMult = 2,
+    gliderSpeedEnabled = false, gliderSpeed = 1.5,
+    gliderStaminaExtension = 1, gliderInfiniteStamina = false, upgrades = {},
+    diverMainMultiplier = 1.5, diverAltMultiplier = 1.2,
+    diverCollectionVerticalMultiplier = 0.5, diverCollectionMode = false,
+    diverModeHotkeyEnabled = true, diverRepeatedAirDives = false,
+    sharkTailAbilityStrength = 1, sharkTailAltAbilityStrength = 1,
+    grapplerRange = 300, grapplerStrength = 28, grapplerRangeEnabled = true,
+    spiritTrajectory = false, spiritFlingStrength = 1, spiritFlingDistance = 100,
+    spiritInfiniteStamina = false, spiritNoLaunchCooldown = false,
+    softAntiBonk = false, hardAntiBonk = false,
+    chargerNoCooldown = false, chargerTurnSpeed = 2, chargerTurnSpeedEnabled = false,
+    chargerSpeed = 1.5, chargerSpeedEnabled = false, autoRefreshUpgrades = false,
+    alternateColorEnabled = true, alternateColor = {r = 0.706, g = 0.196, b = 1.0},
+    alternateRandomRound = false,
+    skyboxColorEnabled = false, skyboxColor = {r = 0.47, g = 0.16, b = 0.86},
+    skyboxRandomRound = false,
+    voidbreakerAutoDestroy = false, voidbreakerAutoSpawn = false, voidbreakerChance = 100,
+    voidbreakerSolver = false,
+    springerWarningSound = true, springerCrushnt = false,
+    ui = {x = 120, y = 80, width = 480, height = 360, opened = true, expanded = true,
+        tab = "Main", sections = {}},
+}
+local limits = {
+    magnetRange = {1, 30}, bellDistortionReduction = {0, 100}, eBoostMult = {1, 2},
+    gliderSpeed = {1, 8}, gliderStaminaExtension = {1, 10},
+    diverMainMultiplier = {0.5, 5}, diverAltMultiplier = {0.5, 5},
+    diverCollectionVerticalMultiplier = {0, 1}, sharkTailAbilityStrength = {0, 5},
+    sharkTailAltAbilityStrength = {0, 5}, grapplerRange = {90, 500}, grapplerStrength = {1, 100},
+    spiritFlingStrength = {1, 20}, spiritFlingDistance = {1, 1000},
+    chargerTurnSpeed = {1, 3}, chargerSpeed = {1, 3},
+    voidbreakerChance = {0, 100},
+}
+local cfg = copy(defaults)
+local config = {dirty = false, due = 0, status = "Auto-save ready"}
+function config:decode(data)
+    if type(data) ~= "table" then return nil end
+    local result = copy(defaults)
+    for key, initial in pairs(defaults) do
+        local value = data[key]
+        if type(initial) == "boolean" and type(value) == "boolean" then result[key] = value
+        elseif type(initial) == "number" and finite(value) then
+            local range = limits[key]
+            result[key] = range and math.clamp(value, range[1], range[2]) or value
+        elseif type(initial) == "table" and type(value) == "table" then
+            if key == "alternateColor" or key == "skyboxColor" then
+                result[key] = {
+                    r = finite(value.r) and math.clamp(value.r, 0, 1) or initial.r,
+                    g = finite(value.g) and math.clamp(value.g, 0, 1) or initial.g,
+                    b = finite(value.b) and math.clamp(value.b, 0, 1) or initial.b,
+                }
+            end
+        end
+    end
+    if type(data.upgrades) == "table" then
+        for name, count in pairs(data.upgrades) do
+            if type(name) == "string" and #name <= 100 and finite(count) and count >= 0 then
+                result.upgrades[name] = math.floor(math.min(count, 2147483647))
+            end
+        end
+    end
+    local ui = data.ui
+    if type(ui) == "table" then
+        for _, key in ipairs({"x", "y", "width", "height"}) do
+            if finite(ui[key]) then result.ui[key] = ui[key] end
+        end
+        result.ui.width = math.clamp(result.ui.width, 360, 2000)
+        result.ui.height = math.clamp(result.ui.height, 260, 1400)
+        local camera = workspace.CurrentCamera
+        local size = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+        result.ui.x = math.clamp(result.ui.x, 0, math.max(0, size.X - 100))
+        result.ui.y = math.clamp(result.ui.y, 0, math.max(0, size.Y - 50))
+        for _, key in ipairs({"opened", "expanded"}) do
+            if type(ui[key]) == "boolean" then result.ui[key] = ui[key] end
+        end
+        if table.find({"Main", "Classes", "Upgrades", "Ememy", "Config"}, ui.tab) then result.ui.tab = ui.tab end
+        if type(ui.sections) == "table" then
+            for name, value in pairs(ui.sections) do
+                if type(name) == "string" and type(value) == "boolean" then result.ui.sections[name] = value end
+            end
+        end
+    end
+    return result
+end
+function config:load()
+    if type(readfile) ~= "function" then return false, "readfile unavailable" end
+    local ok, result = pcall(function() return self:decode(HttpService:JSONDecode(readfile(CONFIG_PATH))) end)
+    if not ok or not result then return false, "Config missing or invalid" end
+    cfg = result
+    return true
+end
+function config:save()
+    if type(writefile) ~= "function" then self.status = "Saving unavailable"; return false, self.status end
+    local ok, err = pcall(function() writefile(CONFIG_PATH, HttpService:JSONEncode(cfg)) end)
+    self.status = ok and "All changes saved" or ("Save failed: " .. tostring(err))
+    if ok then self.dirty = false else self.due = os.clock() + 5 end
+    return ok, err
+end
+function config:touch()
+    if not app.scope.alive then return end
+    if not self.dirty then self.due = os.clock() + 0.5 end
+    self.dirty = true
+    self.status = "Saving changes..."
+end
+function config:set(key, value)
+    local range = limits[key]
+    if range then
+        if not finite(value) then return end
+        value = math.clamp(value, range[1], range[2])
+    end
+    cfg[key] = value
+    self:touch()
+    if app.onSetting then app.onSetting(key) end
+end
+config:load()
+cfg.ui.tab = "Main"
+
+
+local movementFeatures = {}
+function movementFeatures:spiritMultiplier(distance)
+    return 1 + (cfg.spiritFlingStrength - 1) * (1 - math.clamp(distance / cfg.spiritFlingDistance, 0, 1))
+end
+function movementFeatures:shark(controller, alternate)
+    local movement = controller.Movement
+    if not app:valid(movement) then return end
+    local root = controller.RootPart or movement.RootPart
+    local value = alternate and cfg.sharkTailAltAbilityStrength or cfg.sharkTailAbilityStrength
+    local velocity = root.AssemblyLinearVelocity
+    root.AssemblyLinearVelocity = Vector3.new(velocity.X, velocity.Y * value, velocity.Z)
+end
+function movementFeatures:clearBonk(movement, velocity, hit)
+    if not app:valid(movement) then return end
+    movement.diveBonked, movement.bonkedOffPlayer = false, false
+    if movement.Animator then movement.Animator:StopAnimation("DiveBonk") end
+    movement.Humanoid:SetAttribute("UsingAbility", false)
+    movement:AdjustHitbox(3, 0.5)
+    local root = movement.RootPart
+    local normal = hit and hit.Normal
+    if typeof(normal) == "Vector3" then
+        local inward = velocity:Dot(normal)
+        if inward < 0 then velocity -= normal * inward end
+        root.CFrame += normal * 0.35
+    end
+    root.AssemblyLinearVelocity = velocity
+end
+function movementFeatures:bind(movement, scope)
+    scope:patch(movement, "DiveBonk", function(original)
+        return function(self, hit, ...)
+            if not scope.alive or not app:valid(self) or (not cfg.softAntiBonk and not cfg.hardAntiBonk) then
+                return original(self, hit, ...)
+            end
+            local velocity = self.RootPart.AssemblyLinearVelocity
+            if cfg.hardAntiBonk then
+                movementFeatures:clearBonk(self, velocity, hit)
+                return false
+            end
+            local results = table.pack(original(self, hit, ...))
+            app:queue("softBonk", function()
+                if scope.alive then movementFeatures:clearBonk(self, velocity, hit) end
+            end, 0, true)
+            return table.unpack(results, 1, results.n)
+        end
+    end)
+    scope:patch(movement, "Unload", function(original)
+        return function(self, ...)
+            -- Unload runs before/independently of CharacterRemoving in MovementLoader.
+            if app.movement == self then app:detachMovement(false) end
+            return original(self, ...)
+        end
+    end)
+end
+function movementFeatures:bindSpecial(controller, id, scope)
+    local function valid()
+        return scope.alive and app.special == controller and app:valid(controller.Movement)
+    end
+    scope:patch(controller, "Reset", function(original)
+        return function(self, ...)
+            if app.special == self then app:detachSpecial(false) end
+            return original(self, ...)
+        end
+    end)
+    if id == "Glider" then
+        -- Glider stores charge in Time/TimeClamp. Step also updates steering,
+        -- collisions and animation, so always pass the real frame delta through.
+        local function refill(self)
+            if valid() and cfg.gliderInfiniteStamina and finite(self.TimeClamp) and self.TimeClamp > 0 then
+                self.Time = self.TimeClamp
+            end
+        end
+        for _, method in ipairs({"SpecialAction", "Start"}) do
+            scope:patch(controller, method, function(original)
+                return function(self, ...)
+                    refill(self)
+                    return original(self, ...)
+                end
+            end)
+        end
+        scope:patch(controller, "Step", function(original)
+            return function(self, dt, ...)
+                if not valid() then return original(self, dt, ...) end
+                refill(self)
+                local capacity = self.TimeClamp
+                local before = finite(self.Time) and finite(capacity) and capacity > 0
+                    and math.clamp(self.Time, 0, capacity)
+                local results = table.pack(original(self, dt, ...))
+                if not valid() then return table.unpack(results, 1, results.n) end
+                if cfg.gliderInfiniteStamina then
+                    refill(self)
+                elseif before and self.TimeClamp == capacity and finite(self.Time) then
+                    -- Original Step checks exhaustion before subtracting charge;
+                    -- correct the raw delta before the next exhaustion check.
+                    local spent = before - self.Time
+                    if spent > 0 and cfg.gliderStaminaExtension > 1 then
+                        self.Time = math.max(0, before - spent / cfg.gliderStaminaExtension)
+                    end
+                end
+                if finite(self.Time) and finite(capacity) and capacity > 0 then
+                    local bar = child(self.UI, "Frame", "Bar")
+                    if bar then
+                        local size = bar.Size
+                        bar.Size = UDim2.new(math.clamp(self.Time / capacity, 0, 1), 0,
+                            size.Y.Scale, size.Y.Offset)
+                    end
+                end
+                -- Original Step assigns a fresh glide velocity every frame.
+                -- Scale that output once, only while gliding; preserve bonk/End.
+                if cfg.gliderSpeedEnabled and self.Movement.gliding and not self.Movement.RootPart.Anchored then
+                    local root = self.Movement.RootPart
+                    root.AssemblyLinearVelocity *= cfg.gliderSpeed
+                end
+                return table.unpack(results, 1, results.n)
+            end
+        end)
+    elseif id == "Spirit" then
+        scope:patch(controller, "Step", function(original)
+            return function(self, dt, ...)
+                if valid() and cfg.spiritInfiniteStamina then self.stamina = 1; dt = 0 end
+                return original(self, dt, ...)
+            end
+        end)
+        scope:patch(controller, "SpecialAction", function(original)
+            return function(self, input, ...)
+                if not valid() then return original(self, input, ...) end
+                local movement, root, statue = self.Movement, self.Movement.RootPart, self.statueRoot
+                local origin = statue and statue.Position
+                local delta = origin and origin - root.Position
+                local sling = self.slingshot and movement.spirit
+                local oldSpeed = movement.spiritSlingshotSpeed or 0
+                local multiplier = delta and movementFeatures:spiritMultiplier(delta.Magnitude) or 1
+                -- Bypass only the launch input gate, after a slingshot statue exists.
+                -- Keeping this out of Step preserves mode toggles and prevents an
+                -- always-cleared cooldown from allowing repeated statue creation.
+                local savedCooldown = self.cooldown
+                local bypass = cfg.spiritNoLaunchCooldown and input == Enum.UserInputState.Begin
+                    and sling and statue and statue.Parent and self.activeStatue and self.activeStatue.Parent
+                    and not self.antiFlyTech and savedCooldown == true
+                if bypass then self.cooldown = false end
+                local results = table.pack(pcall(original, self, input, ...))
+                if bypass and valid() and movement.spirit then self.cooldown = savedCooldown end
+                if not results[1] then error(results[2], 0) end
+                if valid() and input == Enum.UserInputState.Begin and sling and delta
+                    and not movement.spirit and not self.slingshot then
+                    if multiplier > 1 then
+                        local velocity = root.AssemblyLinearVelocity
+                        root.AssemblyLinearVelocity = Vector3.new(delta.X * 2.5 * multiplier, velocity.Y, delta.Z * 2.5 * multiplier)
+                        local horizontal = Vector3.new(delta.X, 0, delta.Z)
+                        if horizontal.Magnitude > 0.001 then movement:SetMoveDirection(horizontal.Unit) end
+                        movement.spiritSlingshotSpeed = oldSpeed + horizontal.Magnitude / 1.5 * multiplier
+                    end
+                    if app.onSpiritLaunch then app:run("trajectory/launch", app.onSpiritLaunch, self, origin, delta) end
+                end
+                return table.unpack(results, 2, results.n)
+            end
+        end)
+    elseif id == "Dive" then
+        scope:patch(controller, "Start", function(original)
+            return function(self, powered, ...)
+                local results = table.pack(original(self, powered, ...))
+                if valid() then
+                    local root = self.RootPart or self.Movement.RootPart
+                    local mult = powered and cfg.diverAltMultiplier or cfg.diverMainMultiplier
+                    local bodyVelocity = root:FindFirstChild("DiveVelocity")
+                    if bodyVelocity and bodyVelocity:IsA("BodyVelocity") then
+                        local v = bodyVelocity.Velocity
+                        bodyVelocity.Velocity = Vector3.new(v.X * mult, v.Y, v.Z * mult)
+                        local force = bodyVelocity.MaxForce
+                        local forceScale = math.max(mult, 1) * 2
+                        bodyVelocity.MaxForce = Vector3.new(force.X * forceScale, force.Y, force.Z * forceScale)
+                    end
+                    local v = root.AssemblyLinearVelocity
+                    root.AssemblyLinearVelocity = Vector3.new(v.X * mult,
+                        v.Y * (cfg.diverCollectionMode and cfg.diverCollectionVerticalMultiplier or 1), v.Z * mult)
+                end
+                return table.unpack(results, 1, results.n)
+            end
+        end)
+    elseif id == "Grapple" then
+        scope:patch(controller, "Cast", function(original)
+            return function(self, memoryCast, ...)
+                if not valid() or not cfg.grapplerRangeEnabled then return original(self, memoryCast, ...) end
+                self.grappleParams.FilterDescendantsInstances = self.Movement.moveCastParams.FilterDescendantsInstances
+                local root, range = self.RootPart, cfg.grapplerRange
+                local target
+                if tick() - self.memoryUpdate <= 0.25 and not memoryCast then
+                    target = self.memoryPosition
+                elseif UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter
+                    or self.Movement.preferredInput ~= Enum.PreferredInput.KeyboardAndMouse then
+                    local camera = workspace.CurrentCamera
+                    if not camera then return nil end
+                    local origin = (camera.CFrame * self.cameraOffset).Position + camera.CFrame.LookVector
+                        * (camera.CFrame.Position - (root.Position + self.Humanoid.CameraOffset)).Magnitude
+                    local result = workspace:Raycast(origin, camera.CFrame.LookVector * range, self.grappleParams)
+                    target = result and result.Position
+                else
+                    local ray = plr:GetMouse().UnitRay
+                    local result = workspace:Raycast(ray.Origin, ray.Direction * 2048, self.grappleParams)
+                    if not result then return nil, ray.Direction end
+                    target = result.Position
+                end
+                if not target or (target - root.Position).Magnitude < 0.001 then return nil end
+                return workspace:Raycast(root.Position, (target - root.Position).Unit * range, self.grappleParams)
+            end
+        end)
+        scope:patch(controller, "Step", function(original)
+            return function(self, dt, ...)
+                local results = table.pack(original(self, dt, ...))
+                if valid() and self.Movement.grappling then
+                    local movement = self.Movement
+                    local wings = movement:HasUpgrade("GraceWings") and 1.5 or 1
+                    self.RootPart.AssemblyLinearVelocity += movement.PlayerMoveDirection
+                        * (cfg.grapplerStrength - 12) * wings * dt * movement.movementSpeedMulti
+                end
+                return table.unpack(results, 1, results.n)
+            end
+        end)
+    elseif id == "Charger" then
+        scope:patch(controller, "End", function(original)
+            return function(self, ...)
+                if not valid() or not cfg.chargerNoCooldown then return original(self, ...) end
+                local rawTween = rawget(self, "BarTween")
+                local noop = function() end
+                self.BarTween = noop
+                local results = table.pack(pcall(original, self, ...))
+                if self.BarTween == noop then self.BarTween = rawTween end
+                if not results[1] then error(results[2], 0) end
+                if valid() then
+                    self.debounceIDX = (self.debounceIDX or 0) + 1
+                    self.debounce, self.lastDebounceWasTripmine = false, false
+                    if self.activeBarTween then self.activeBarTween:Cancel(); self.activeBarTween = nil end
+                    local frame = child(self.UI, "Frame")
+                    if frame then frame.Visible = false end
+                end
+                return table.unpack(results, 2, results.n)
+            end
+        end)
+        scope:patch(controller, "Step", function(original)
+            return function(self, dt, ...)
+                local results = table.pack(original(self, dt, ...))
+                if valid() and self.Movement.charging then
+                    local movement = self.Movement
+                    if cfg.chargerSpeedEnabled then
+                        movement.classSpeedMulti = math.clamp((movement.classSpeedMulti or 0) * cfg.chargerSpeed, 0, 2 * cfg.chargerSpeed)
+                    end
+                    if cfg.chargerTurnSpeedEnabled then
+                        local wanted = movement.WantDirection
+                        if typeof(wanted) ~= "Vector3" or wanted.Magnitude < 0.001 then wanted = movement.PlayerMoveDirection end
+                        local current = movement.TrueMoveUnit
+                        if typeof(wanted) == "Vector3" and typeof(current) == "Vector3" then
+                            wanted *= Vector3.new(1, 0, 1)
+                            current *= Vector3.new(1, 0, 1)
+                            if wanted.Magnitude > 0.001 then
+                                if current.Magnitude < 0.001 then current = wanted end
+                                local alpha = 1 - math.exp(-math.max(0, cfg.chargerTurnSpeed - 1) * 8 * dt)
+                                local direction = current.Unit:Lerp(wanted.Unit, alpha)
+                                if direction.Magnitude > 0.001 then movement:SetMoveDirection(direction.Unit) end
+                            end
+                        end
+                    end
+                end
+                return table.unpack(results, 1, results.n)
+            end
+        end)
+    end
+    if id == "Dive" or id == "Grapple" or id == "Charger" then
+        local alternate
+        for _, key in ipairs({"SpecialAction", "AltSpecialAction"}) do
+            scope:patch(controller, key, function(original)
+                return function(self, ...)
+                    if not valid() then return original(self, ...) end
+                    local previous = alternate
+                    if alternate == nil then alternate = key == "AltSpecialAction" end
+                    local results = table.pack(pcall(original, self, ...))
+                    alternate = previous
+                    if not results[1] then error(results[2], 0) end
+                    return table.unpack(results, 2, results.n)
+                end
+            end)
+        end
+        scope:patch(controller, id == "Dive" and "TryDive" or "SharkTail", function(original)
+            return function(self, ...)
+                local before = valid() and self.Movement.diving
+                if valid() and id == "Dive" and cfg.diverRepeatedAirDives then self.Movement.slideJumped = false end
+                local results = table.pack(original(self, ...))
+                if valid() and (id ~= "Dive" or (before and not self.Movement.diving and self.Movement.diveSharkTech)) then
+                    movementFeatures:shark(self, alternate)
+                end
+                return table.unpack(results, 1, results.n)
+            end
+        end)
+    end
+end
+
+
+-- Low-frequency adapters; no replay of foreign event connections and no native hooks.
+local upgrades = {handler = nil, source = nil, baselines = {}, applied = {}, nextRefresh = 0}
+function upgrades:resolve()
+    local source = child(ReplicatedFirst, "ClientModules", "UpgradeHandler")
+    if self.source ~= source or not self.handler then self.handler = import(source); self.source = source end
+    return self.handler
+end
+function upgrades:setCount(name, count)
+    if not app:inRound() then return false end
+    local epoch, movement = app.epoch, app.movement
+    local handler = self:resolve()
+    if not handler or type(handler.GetUpgradeStack) ~= "function" then return false end
+    if type(getsenv) ~= "function" then app:report("Upgrades", "getsenv unavailable"); return false end
+    local ok, environment = pcall(getsenv, self.source)
+    local apply = ok and environment and environment.OnUpgradesChanged
+    if type(apply) ~= "function" then app:report("Upgrades", "UpgradeHandler not ready"); return false end
+    if self.baselines[name] == nil then self.baselines[name] = handler.GetUpgradeStack(name) end
+    local succeeded, err = pcall(apply, {[name] = count})
+    if not succeeded then app:report("Upgrades", err); return false end
+    if epoch ~= app.epoch or not app:valid(movement) then return false end
+    local folder = child(ReplicatedStorage, "UpgradeFolder", "Upgrades")
+    if folder then
+        local value = folder:FindFirstChild(name)
+        if not value then value = Instance.new("IntValue"); value.Name = name; value.Parent = folder end
+        if value:IsA("IntValue") then value.Value = count end
+    end
+    self.applied[name] = count
+    return true
+end
+function upgrades:sync(force)
+    if not app:inRound() then return end
+    local handler = self:resolve()
+    if not handler then return end
+    for name, count in pairs(cfg.upgrades) do
+        if not app:inRound() then break end
+        if count > 0 and (force or cfg.autoRefreshUpgrades) then
+            local value = child(ReplicatedStorage, "UpgradeFolder", "Upgrades", name)
+            if handler.GetUpgradeStack(name) ~= count or not value or value.Value ~= count
+                or (force and self.applied[name] ~= count) then self:setCount(name, count) end
+        end
+    end
+end
+function upgrades:restore()
+    if not app:inRound() then return end
+    local handler = self:resolve()
+    for name, initial in pairs(self.baselines) do
+        if handler and handler.GetUpgradeStack(name) == self.applied[name] then self:setCount(name, initial) end
+    end
+    table.clear(self.baselines)
+    table.clear(self.applied)
+end
+function upgrades:change(name, delta)
+    local count = math.max(0, math.min(2147483647, (cfg.upgrades[name] or 0) + delta))
+    cfg.upgrades[name] = count
+    config:touch()
+    app:queue("upgrade/" .. name, function() self:setCount(name, count) end, 0, true)
+end
+function upgrades:reconcile()
+    for name, applied in pairs(self.applied) do
+        if not cfg.upgrades[name] or cfg.upgrades[name] <= 0 then
+            local handler = self:resolve()
+            if handler and handler.GetUpgradeStack(name) == applied then self:setCount(name, self.baselines[name] or 0) end
+            self.applied[name], self.baselines[name] = nil, nil
+        end
+    end
+    self:sync(true)
+end
+
+local magnet = {applied = false, appliedRange = nil, appliedMode = nil}
+
+function magnet:resetState()
+    self.applied = false
+    self.appliedRange = nil
+    self.appliedMode = nil
+end
+
+function magnet:tick()
+    if not app:inRound() then return end
+
+    local event = child(ReplicatedStorage, "Events", "MovementGiftMagnet")
+    if not event then return end
+
+    local evil = cfg.evilGiftMagnet == true
+    local range = evil and 300 or math.clamp(tonumber(cfg.magnetRange) or 1, 1, 30)
+
+    -- MovementGiftMagnet uses an Add/Reset style API. The old implementation
+    -- sent Add every 0.5 seconds, which could repeatedly stack the value and
+    -- put unnecessary load on the game's input/movement handler. Only apply
+    -- the value when the requested mode/range actually changes.
+    if range <= 1 then
+        if self.applied then
+            event:Fire({Reset = math.huge})
+            self:resetState()
+        end
+        return
+    end
+
+    if self.applied and self.appliedRange == range and self.appliedMode == evil then
+        return
+    end
+
+    if self.applied then
+        event:Fire({Reset = math.huge})
+    end
+
+    event:Fire({Add = range})
+    self.applied = true
+    self.appliedRange = range
+    self.appliedMode = evil
+end
+
+function magnet:restore()
+    if self.applied and app:inRound() then
+        local event = child(ReplicatedStorage, "Events", "MovementGiftMagnet")
+        if event then event:Fire({Reset = math.huge}) end
+    end
+    self:resetState()
+end
+
+local glider = {scope = nil, force = nil, root = nil, sample = Vector3.zero}
+function glider:clear()
+    if self.scope then self.scope:close(false) end
+    self.scope, self.force, self.root = nil, nil, nil
+    self.sample = Vector3.zero
+end
+function glider:tick()
+    local movement = app.movement
+    if not cfg.eBoostEnabled or cfg.gliderSpeedEnabled or not app:valid(movement)
+        or movement.SpecialID ~= "Glider" then self:clear(); return end
+    local root = movement.RootPart
+    if self.root ~= root then self:clear(); self.root = root; self.sample = root.AssemblyLinearVelocity end
+    if not UserInputService:IsKeyDown(Enum.KeyCode.E) then
+        if self.force then self.force.Enabled = false end
+        self.sample = root.AssemblyLinearVelocity
+        return
+    end
+    if not self.force then
+        local scope = Scope.new()
+        self.scope = scope
+        local attachment = root:FindFirstChild("RootAttachment")
+        if not attachment then
+            attachment = Instance.new("Attachment")
+            attachment.Name = "LarpscapeEBoostAttachment"
+            attachment.Parent = root
+            scope:own(function() attachment:Destroy() end)
+        end
+        local force = Instance.new("LinearVelocity")
+        force.Name = "LarpscapeEBoost"
+        force.Attachment0 = attachment
+        force.RelativeTo = Enum.ActuatorRelativeTo.World
+        force.MaxForce = math.huge
+        force.Parent = root
+        self.force = force
+        scope:own(function() force:Destroy() end)
+    end
+    self.sample = self.sample:Lerp(root.AssemblyLinearVelocity / cfg.eBoostMult, 0.15)
+    self.force.VectorVelocity = self.force.VectorVelocity:Lerp(self.sample * cfg.eBoostMult, 0.18)
+    self.force.Enabled = true
+end
+
+local enemies = {
+    folder = nil,
+    scope = nil,
+    targets = {},
+    voidbreakerVal = nil,
+    voidbreakerInstance = nil,
+    pendingVoidbreaker = false,
+    springerTargets = {},
+    springerDrops = {},
+    warningSound = nil,
+    swordMarks = {},
+    swordMarkFolder = nil,
+}
+function enemies:clearSwordMarks()
+    for sword, mark in pairs(self.swordMarks) do
+        mark:Destroy()
+        self.swordMarks[sword] = nil
+    end
+    if self.swordMarkFolder then
+        self.swordMarkFolder:Destroy()
+        self.swordMarkFolder = nil
+    end
+    local leftover = workspace:FindFirstChild("LarpscapeVoidbreakerSolver")
+    if leftover then leftover:Destroy() end
+end
+function enemies:updateSwordMarks()
+    local round = ReplicatedStorage:FindFirstChild("InRound")
+    if not cfg.voidbreakerSolver or not round or not round.Value then
+        if self.swordMarkFolder then self:clearSwordMarks() end
+        return
+    end
+    local folder = workspace:FindFirstChild("Enemies")
+    local root = app.character and app.character:FindFirstChild("HumanoidRootPart")
+    if not folder or not root then
+        if self.swordMarkFolder then self:clearSwordMarks() end
+        return
+    end
+    local seen = {}
+    for _, enemy in ipairs(folder:GetChildren()) do
+        if enemy.Name == "Voidbreaker" then
+            for _, sword in ipairs(enemy:GetChildren()) do
+                if sword:IsA("BasePart") and (sword.Name == "Sword" or sword.Name == "SwordFast" or sword.Name == "SwordSlow") then
+                    local blade = sword:FindFirstChild("Model2")
+                    if blade and blade:IsA("BasePart") and blade.LocalTransparencyModifier < 0.95 then
+                        seen[sword] = true
+                        local mark = self.swordMarks[sword]
+                        if not mark then
+                            if not self.swordMarkFolder then
+                                self.swordMarkFolder = Instance.new("Folder")
+                                self.swordMarkFolder.Name = "LarpscapeVoidbreakerSolver"
+                                self.swordMarkFolder.Parent = workspace
+                            end
+                            mark = Instance.new("Part")
+                            mark.Name = "SwordPath"
+                            mark.Shape = Enum.PartType.Cylinder
+                            mark.Anchored = true
+                            mark.CanCollide = false
+                            mark.CanTouch = false
+                            mark.CanQuery = false
+                            mark.Material = Enum.Material.Neon
+                            mark.Transparency = 0.55
+                            mark.Parent = self.swordMarkFolder
+                            self.swordMarks[sword] = mark
+                        end
+                        -- Voidbreaker's blade points along +UpVector; its spin is around that axis.
+                        local direction = blade.CFrame.UpVector
+                        local length = blade.Size.Y
+                        local markerLength = length * 1.2
+                        mark.Size = Vector3.new(markerLength, blade.Size.X * 0.5, blade.Size.X * 0.5)
+                        mark.CFrame = CFrame.fromMatrix(blade.Position + direction * (length + markerLength) * 0.5,
+                            direction, Vector3.yAxis)
+                        local toSword = sword.Position - root.Position
+                        local facingSword = toSword.Magnitude < 0.01 or root.CFrame.LookVector:Dot(toSword.Unit) > 0
+                        mark.Color = sword.Name == "SwordFast" and not facingSword
+                            and Color3.fromRGB(40, 255, 75) or Color3.fromRGB(255, 35, 35)
+                    end
+                end
+            end
+        end
+    end
+    for sword, mark in pairs(self.swordMarks) do
+        if not seen[sword] then
+            mark:Destroy()
+            self.swordMarks[sword] = nil
+        end
+    end
+end
+function enemies:forget(enemy, restore)
+    local scope = self.targets[enemy]
+    if scope then scope:close(restore); self.targets[enemy] = nil end
+end
+function enemies:forgetSpringer(enemy, restore)
+    local scope = self.springerTargets[enemy]
+    if scope then scope:close(restore); self.springerTargets[enemy] = nil end
+    self.springerDrops[enemy] = nil
+end
+function enemies:initSound()
+    if self.warningSound and self.warningSound.Parent == SoundService then return self.warningSound end
+    local existing = SoundService:FindFirstChild("SpringerDropWarningSound")
+    if existing then existing:Destroy() end
+    local sound = Instance.new("Sound")
+    sound.Name = "SpringerDropWarningSound"
+    sound.SoundId = "rbxassetid://137030715707378"
+    sound.Volume = 1
+    sound.Looped = true
+    sound.Parent = SoundService
+    pcall(function() ContentProvider:PreloadAsync({sound}) end)
+    self.warningSound = sound
+    return sound
+end
+function enemies:stopSpringerSound()
+    if self.warningSound and self.warningSound.IsPlaying then
+        self.warningSound:Stop()
+    end
+end
+function enemies:applyCrushnt(enemy, kill)
+    local scope = self.springerTargets[enemy]
+    if not scope or not scope.alive or not kill or not kill.Parent then return end
+    scope.saved = scope.saved or {}
+    if cfg.springerCrushnt then
+        if not scope.saved[kill] then
+            scope.saved[kill] = {
+                Size = kill.Size,
+                CanTouch = kill.CanTouch,
+                CanCollide = kill.CanCollide,
+                CanQuery = kill.CanQuery,
+            }
+        end
+        kill.Size = Vector3.new(0.0001, 0.0001, 0.0001)
+        kill.CanTouch = false
+        kill.CanCollide = false
+        kill.CanQuery = false
+    elseif scope.saved[kill] then
+        local prev = scope.saved[kill]
+        kill.Size = prev.Size
+        kill.CanTouch = prev.CanTouch
+        kill.CanCollide = prev.CanCollide
+        kill.CanQuery = prev.CanQuery
+        scope.saved[kill] = nil
+    end
+end
+function enemies:syncSpringerCrushnt()
+    for enemy in pairs(self.springerTargets) do
+        if enemy.Parent == self.folder then
+            local col = enemy:FindFirstChild("Collision")
+            local kill = col and col:FindFirstChild("Kill")
+            if kill and kill:IsA("BasePart") then
+                self:applyCrushnt(enemy, kill)
+            end
+        end
+    end
+end
+function enemies:watchSpringer(enemy)
+    if self.springerTargets[enemy] then return end
+    local scope = Scope.new()
+    scope.saved = {}
+    self.springerTargets[enemy] = scope
+
+    local function setupKill(kill)
+        if not kill or not kill:IsA("BasePart") then return end
+        self:applyCrushnt(enemy, kill)
+        scope:connect(kill:GetPropertyChangedSignal("CanCollide"), function()
+            if cfg.springerCrushnt and kill.CanCollide ~= false then
+                kill.CanCollide = false
+            end
+        end)
+        scope:connect(kill:GetPropertyChangedSignal("Size"), function()
+            if cfg.springerCrushnt and kill.Size ~= Vector3.new(0.0001, 0.0001, 0.0001) then
+                kill.Size = Vector3.new(0.0001, 0.0001, 0.0001)
+            end
+        end)
+    end
+
+    local collision = enemy:FindFirstChild("Collision")
+    local kill = collision and collision:FindFirstChild("Kill")
+    if kill then setupKill(kill) end
+
+    scope:connect(enemy.DescendantAdded, function(obj)
+        if obj.Name == "Kill" and obj:IsA("BasePart") then
+            setupKill(obj)
+        end
+    end)
+
+    local function setupRemote(ce)
+        if not ce or not ce:IsA("RemoteEvent") then return end
+        scope:connect(ce.OnClientEvent, function(action, data)
+            if (action == "Jump" or action == "Drop") and type(data) == "table" and typeof(data.DropPosition) == "Vector3" then
+                local duration = enemy:GetAttribute("JumpDuration") or 2.357
+                local radius = (enemy:GetAttribute("Big") and 26 or 13) + 2
+                self.springerDrops[enemy] = {
+                    pos = data.DropPosition,
+                    radius = radius,
+                    endTime = os.clock() + duration
+                }
+            end
+        end)
+    end
+    local clientEvent = enemy:FindFirstChild("ClientEvent")
+    if clientEvent then setupRemote(clientEvent) end
+    scope:connect(enemy.ChildAdded, function(childObj)
+        if childObj.Name == "ClientEvent" then setupRemote(childObj) end
+    end)
+
+    scope:own(function(restore)
+        if restore and enemy.Parent == self.folder then
+            for k, state in pairs(scope.saved or {}) do
+                if k.Parent then
+                    k.Size = state.Size
+                    k.CanTouch = state.CanTouch
+                    k.CanCollide = state.CanCollide
+                    k.CanQuery = state.CanQuery
+                end
+            end
+        end
+        table.clear(scope.saved or {})
+        self.springerDrops[enemy] = nil
+    end)
+    scope:connect(enemy.Destroying, function() self:forgetSpringer(enemy, false) end)
+end
+function enemies:watch(enemy)
+    if not cfg.telefraggerAutoBreakAI or enemy.Name ~= "Telefragger" or self.targets[enemy] then return end
+    local scope = Scope.new()
+    local saved = {}
+    self.targets[enemy] = scope
+    local function apply(object)
+        if saved[object] or not scope.alive then return end
+        local property
+        if object:IsA("BasePart") then property = "CanTouch"
+        elseif object:IsA("BaseScript") and object.Name == "Telefragger_ClientAI" then property = "Enabled" end
+        if not property then return end
+        saved[object] = {property = property, value = object[property]}
+        object[property] = false
+    end
+    scope:own(function(restore)
+        if restore and enemy.Parent == self.folder then
+            for object, savedValue in pairs(saved) do
+                if object.Parent and object[savedValue.property] == false then object[savedValue.property] = savedValue.value end
+            end
+        end
+        table.clear(saved)
+    end)
+    scope:connect(enemy.DescendantAdded, apply)
+    scope:connect(enemy.DescendantRemoving, function(object) saved[object] = nil end)
+    scope:connect(enemy.Destroying, function() self:forget(enemy, false) end)
+    apply(enemy)
+    for _, object in ipairs(enemy:GetDescendants()) do apply(object) end
+    scope.saved = saved
+end
+function enemies:clear(restore)
+    self:clearSwordMarks()
+    if self.scope then self.scope:close(false); self.scope = nil end
+    for enemy in pairs(self.targets) do self:forget(enemy, restore) end
+    for enemy in pairs(self.springerTargets) do self:forgetSpringer(enemy, restore) end
+    table.clear(self.springerDrops)
+    self:stopSpringerSound()
+    if self.warningSound then
+        self.warningSound:Destroy()
+        self.warningSound = nil
+    end
+    self.folder = nil
+end
+function enemies:tick()
+    local folder = workspace:FindFirstChild("Enemies")
+    if folder ~= self.folder then
+        self:clear(false)
+        self.folder = folder
+        if folder then
+            self.scope = Scope.new()
+            self.scope:connect(folder.ChildRemoved, function(enemy)
+                self:forget(enemy, false)
+                self:forgetSpringer(enemy, false)
+            end)
+        end
+    end
+    if not folder then return end
+    if not cfg.telefraggerAutoBreakAI then
+        for enemy in pairs(self.targets) do self:forget(enemy, true) end
+    end
+    for _, enemy in ipairs(folder:GetChildren()) do
+        if enemy.Name == "Kolona" and cfg.kolonaAutoDestroy then enemy:Destroy()
+        elseif enemy.Name == "Voidbreaker" and cfg.voidbreakerAutoDestroy then enemy:Destroy()
+        elseif enemy.Name == "Telefragger" then self:watch(enemy)
+        elseif enemy.Name == "Springer" then self:watchSpringer(enemy) end
+    end
+    for enemy, scope in pairs(self.targets) do
+        if enemy.Parent ~= folder then self:forget(enemy, false)
+        else
+            for object, saved in pairs(scope.saved) do
+                if not object.Parent then scope.saved[object] = nil
+                elseif object[saved.property] ~= false then object[saved.property] = false end
+            end
+        end
+    end
+    for enemy, scope in pairs(self.springerTargets) do
+        if enemy.Parent ~= folder then
+            self:forgetSpringer(enemy, false)
+        else
+            local col = enemy:FindFirstChild("Collision")
+            local k = col and col:FindFirstChild("Kill")
+            if k then self:applyCrushnt(enemy, k) end
+        end
+    end
+end
+function enemies:heartbeat()
+    local sound = self:initSound()
+    local inSpot = false
+    if cfg.springerWarningSound and self.folder then
+        local char = plr.Character
+        local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Hitbox"))
+        local pPos = root and root.Position
+        local now = os.clock()
+        for enemy, scope in pairs(self.springerTargets) do
+            if enemy.Parent == self.folder then
+                local mark = enemy:FindFirstChild("SpringerMark")
+                if mark and mark:IsA("BasePart") and mark.Size.X > 1 then
+                    local r = (enemy:GetAttribute("Big") and 26 or 13) + 2
+                    if not self.springerDrops[enemy] or self.springerDrops[enemy].endTime < now + 0.1 then
+                        self.springerDrops[enemy] = {
+                            pos = mark.Position,
+                            radius = r,
+                            endTime = now + 0.25
+                        }
+                    end
+                end
+            end
+        end
+        if pPos then
+            for enemy, drop in pairs(self.springerDrops) do
+                if now >= drop.endTime or not enemy.Parent or enemy.Parent ~= self.folder then
+                    self.springerDrops[enemy] = nil
+                else
+                    local x = pPos.X - drop.pos.X
+                    local z = pPos.Z - drop.pos.Z
+                    local horiz = math.sqrt(x * x + z * z)
+                    local vert = math.abs(pPos.Y - drop.pos.Y)
+                    if horiz <= drop.radius and vert <= 30 then
+                        inSpot = true
+                        break
+                    end
+                end
+            end
+        end
+    else
+        table.clear(self.springerDrops)
+    end
+    if inSpot then
+        if sound and not sound.IsPlaying then sound:Play() end
+    else
+        if sound and sound.IsPlaying then sound:Stop() end
+    end
+end
+function enemies:destroyKolona()
+    local folder = workspace:FindFirstChild("Enemies")
+    if folder then for _, enemy in ipairs(folder:GetChildren()) do if enemy.Name == "Kolona" then enemy:Destroy() end end end
+end
+function enemies:destroyVoidbreaker()
+    local folder = workspace:FindFirstChild("Enemies")
+    if folder then
+        for _, enemy in ipairs(folder:GetChildren()) do
+            if enemy.Name == "Voidbreaker" then enemy:Destroy() end
+        end
+    end
+    local active = child(ReplicatedStorage, "EnemyFolder", "ActiveEnemies")
+    local val = active and active:FindFirstChild("Voidbreaker")
+    if val then val:Destroy() end
+    self.voidbreakerVal = nil
+    self.voidbreakerInstance = nil
+    self.pendingVoidbreaker = false
+end
+function enemies:spawnVoidbreaker()
+    local enemyFolder = child(ReplicatedStorage, "EnemyFolder")
+    if not enemyFolder then return end
+    local activeEnemies = enemyFolder:FindFirstChild("ActiveEnemies")
+    local enemiesTemplate = enemyFolder:FindFirstChild("Enemies")
+    if not activeEnemies or not enemiesTemplate then return end
+    if not activeEnemies:FindFirstChild("Voidbreaker") then
+        local int = Instance.new("IntValue")
+        int.Name = "Voidbreaker"
+        int.Value = 1
+        int.Parent = activeEnemies
+        self.voidbreakerVal = int
+    end
+    local inRoundObj = ReplicatedStorage:FindFirstChild("InRound")
+    local inRound = inRoundObj and inRoundObj.Value == true
+    if inRound then
+        local folder = workspace:FindFirstChild("Enemies")
+        if folder and not folder:FindFirstChild("Voidbreaker") then
+            local template = enemiesTemplate:FindFirstChild("Voidbreaker")
+            if template then
+                local v = template:Clone()
+                v.Parent = folder
+                local ai = v:FindFirstChild("Voidbreaker_AI")
+                if ai then ai.Enabled = true end
+                self.voidbreakerInstance = v
+            end
+        end
+    else
+        self.pendingVoidbreaker = true
+    end
+end
+function enemies:onRoundStart()
+    if self.pendingVoidbreaker then
+        self.pendingVoidbreaker = false
+        self:spawnVoidbreaker()
+        return
+    end
+    if cfg.voidbreakerAutoSpawn then
+        local roll = math.random(1, 100)
+        if roll <= (cfg.voidbreakerChance or 0) then
+            self:spawnVoidbreaker()
+        end
+    end
+end
+function enemies:cleanupSpawnedVoidbreaker()
+    if self.voidbreakerInstance and self.voidbreakerInstance.Parent then
+        self.voidbreakerInstance:Destroy()
+    end
+    self.voidbreakerInstance = nil
+    if self.voidbreakerVal and self.voidbreakerVal.Parent then
+        self.voidbreakerVal:Destroy()
+    end
+    self.voidbreakerVal = nil
+end
+function enemies:onRoundEnd()
+    self:clearSwordMarks()
+    self:cleanupSpawnedVoidbreaker()
+    table.clear(self.springerDrops)
+    self:stopSpringerSound()
+end
+
+-- Boioing renders Nausea at Last+1 using a non-orthonormal matrix (shear/scale).
+-- CFrame:Lerp interpolates rotations and cannot safely blend this distortion.
+-- Each Nausea matrix component is linear in effect strength, so interpolate
+-- components directly. B * (I + amount * (D - I)) = B + amount * (B*D - B).
+local bell = {}
+function bell:reduce(before, after, amount)
+    if amount <= 0 then return before end
+    if amount >= 1 then return after end
+    local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = before:GetComponents()
+    local ax, ay, az, a00, a01, a02, a10, a11, a12, a20, a21, a22 = after:GetComponents()
+    return CFrame.new(
+        x + (ax - x) * amount, y + (ay - y) * amount, z + (az - z) * amount,
+        r00 + (a00 - r00) * amount, r01 + (a01 - r01) * amount, r02 + (a02 - r02) * amount,
+        r10 + (a10 - r10) * amount, r11 + (a11 - r11) * amount, r12 + (a12 - r12) * amount,
+        r20 + (a20 - r20) * amount, r21 + (a21 - r21) * amount, r22 + (a22 - r22) * amount)
+end
+function bell:bind(scope)
+    local before, camera
+    local preName, postName = "LarpscapeBellBefore", "LarpscapeBellAfter"
+    RunService:BindToRenderStep(preName, Enum.RenderPriority.Last.Value, function()
+        before, camera = nil, nil
+        if not scope.alive or not app:valid(app.movement) then return end
+        if not cfg.bellBreakDistortion and cfg.bellDistortionReduction <= 0 then return end
+        if not app.character:FindFirstChild("Boioing") then return end
+        camera = workspace.CurrentCamera
+        before = camera and camera.CFrame
+    end)
+    RunService:BindToRenderStep(postName, Enum.RenderPriority.Last.Value + 2, function()
+        if scope.alive and before and camera == workspace.CurrentCamera and app:valid(app.movement) then
+            local remaining = cfg.bellBreakDistortion and 0 or 1 - cfg.bellDistortionReduction / 100
+            camera.CFrame = bell:reduce(before, camera.CFrame, remaining)
+        end
+        before, camera = nil, nil
+    end)
+    scope:own(function()
+        RunService:UnbindFromRenderStep(preName)
+        RunService:UnbindFromRenderStep(postName)
+        before, camera = nil, nil
+    end)
+end
+
+
+local trajectory = {
+    scope = nil, folder = nil, segments = {}, ring = {}, landing = nil,
+    beacon = nil, label = nil, prediction = nil, flightEnds = nil,
+    previewController = nil, segmentCount = 0, animationElapsed = 0,
+    previewElapsed = 0, previewOrigin = nil, previewDelta = nil,
+}
+local TRAJECTORY_FRAME = 1 / 60
+-- Keep visual animation at 60 FPS, but use a shorter coarse simulation for aiming.
+-- This avoids hundreds of raycasts on every render frame while staying responsive.
+local TRAJECTORY_PREVIEW_FRAME = 1 / 60
+local TRAJECTORY_PREVIEW_MOVE = 0.012
+function trajectory:clear()
+    if self.scope then self.scope:close(false) end
+    self.scope, self.folder, self.landing, self.beacon, self.label = nil, nil, nil, nil, nil
+    self.prediction, self.flightEnds, self.previewController = nil, nil, nil
+    self.segmentCount, self.animationElapsed, self.previewElapsed = 0, 0, 0
+    self.previewOrigin, self.previewDelta = nil, nil
+    table.clear(self.segments)
+    table.clear(self.ring)
+end
+function trajectory:marker(name, shape)
+    local part = Instance.new("Part")
+    part.Name = name or "SpiritTrajectoryMarker"
+    part.Anchored, part.CanCollide, part.CanTouch, part.CanQuery = true, false, false, false
+    part.Material = Enum.Material.Neon
+    part.CastShadow = false
+    part.Shape = shape or Enum.PartType.Block
+    part.Transparency = 1
+    local overlay = Instance.new("BoxHandleAdornment")
+    overlay.Name = "TrajectoryOverlay"
+    overlay.Adornee, overlay.AlwaysOnTop, overlay.ZIndex = part, true, 1
+    overlay.Transparency = 0.25
+    overlay.Visible = false
+    overlay.Parent = part
+    part.Parent = self.folder
+    return part
+end
+function trajectory:style(part, visible, size, cframe, color, alpha)
+    part.Transparency = visible and (alpha or 0.15) or 1
+    if visible then part.Size, part.CFrame, part.Color = size, cframe, color end
+    local overlay = part.TrajectoryOverlay
+    overlay.Size, overlay.Color3, overlay.Visible = part.Size, part.Color, visible
+    overlay.Transparency = math.min(part.Transparency + 0.08, 1)
+end
+function trajectory:line(part, first, last, width, color, alpha)
+    local length = (last - first).Magnitude
+    self:style(part, length > 0.001, Vector3.new(width, width, math.max(length, 0.01)),
+        length > 0.001 and CFrame.lookAt((first + last) / 2, last) or CFrame.new(first), color, alpha)
+end
+function trajectory:ensure()
+    if self.scope then return end
+    self.scope = Scope.new()
+    local folder = Instance.new("Folder")
+    folder.Name = "LarpscapeSpiritTrajectory"
+    self.scope:own(function() folder:Destroy() end)
+    self.folder = folder
+    folder.Parent = workspace
+    self.landing = self:marker("SpiritLandingCenter", Enum.PartType.Ball)
+    self.beacon = self:marker("SpiritLandingBeacon", Enum.PartType.Ball)
+    for i = 1, 16 do self.ring[i] = self:marker("SpiritLandingRing") end
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "SpiritLandingLabel"
+    billboard.Adornee = self.landing
+    billboard.AlwaysOnTop, billboard.LightInfluence = true, 0
+    billboard.MaxDistance = 10000
+    billboard.Size = UDim2.fromOffset(192, 50)
+    billboard.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
+    billboard.Parent = self.landing
+    local text = Instance.new("TextLabel")
+    text.Name = "Summary"
+    text.Size = UDim2.fromScale(1, 1)
+    text.BackgroundColor3 = Color3.fromRGB(12, 16, 27)
+    text.BackgroundTransparency = 0.2
+    text.BorderSizePixel = 0
+    text.Font = Enum.Font.GothamBold
+    text.TextSize = 14
+    text.TextStrokeTransparency = 0.7
+    text.TextWrapped = true
+    text.Parent = billboard
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 9)
+    corner.Parent = text
+    self.label = text
+end
+function trajectory:predict(controller, origin, delta, fastPreview)
+    local movement, root = controller.Movement, controller.Movement.RootPart
+    local multiplier = movementFeatures:spiritMultiplier(delta.Magnitude)
+    local velocity = Vector3.new(delta.X * 2.5 * multiplier,
+        math.max(delta.Y, 0) ^ 0.85 * 2.5 + 25, delta.Z * 2.5 * multiplier)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {movement.Character, controller.activeStatue, self.folder}
+    params.RespectCanCollide, params.CollisionGroup = true, root.CollisionGroup
+    local humanoid = movement.Humanoid
+    local footOffset = humanoid.HipHeight + root.Size.Y / 2
+    if humanoid.RigType == Enum.HumanoidRigType.R6 then
+        local leg = movement.Character:FindFirstChild("Left Leg")
+        footOffset += leg and leg.Size.Y or 2
+    end
+    local position, points = origin, {origin}
+    local hitPosition, hitNormal, flightTime = nil, nil, 0
+    -- Aiming uses a coarse six-second preview; launch prediction keeps the
+    -- original 0.04s/150-step precision. Both paths remain collision-aware.
+    local dt, gravity = fastPreview and 0.1 or 0.04, workspace.Gravity
+    local maxSteps = fastPreview and 60 or 150
+    for stepIndex = 1, maxSteps do
+        local nextPosition = position + velocity * dt + Vector3.new(0, -0.5 * gravity * dt * dt, 0)
+        local step = nextPosition - position
+        -- Preview collision checks are sampled every third integration step;
+        -- the points still integrate every step, so the visual path stays smooth
+        -- while raycast work is reduced to roughly 20 checks per refresh.
+        local sampleCollision = not fastPreview or stepIndex % 3 == 1
+        local hit = sampleCollision and workspace:Raycast(position, step, params)
+        -- The precise launch path performs the foot-offset ground ray. Preview
+        -- intentionally skips it to keep aiming responsive.
+        local floorHit = (not fastPreview and velocity.Y <= 0)
+            and workspace:Raycast(position - Vector3.new(0, footOffset, 0), step, params)
+        if floorHit and floorHit.Normal.Y > 0.5 and (not hit or floorHit.Distance < hit.Distance) then
+            hitPosition, hitNormal = floorHit.Position, floorHit.Normal
+            table.insert(points, hitPosition + Vector3.new(0, footOffset, 0))
+            flightTime += dt * math.clamp(floorHit.Distance / math.max(step.Magnitude, 0.001), 0, 1)
+            break
+        elseif hit then
+            hitPosition, hitNormal = hit.Position, hit.Normal
+            table.insert(points, hitPosition)
+            flightTime += dt * math.clamp(hit.Distance / math.max(step.Magnitude, 0.001), 0, 1)
+            break
+        end
+        table.insert(points, nextPosition)
+        position = nextPosition
+        velocity += Vector3.new(0, -gravity * dt, 0)
+        flightTime += dt
+    end
+    local kind = not hitPosition and "unknown" or (hitNormal.Y > 0.5 and "landing" or "wall")
+    return {points = points, target = hitPosition or position, normal = hitNormal or Vector3.yAxis,
+        kind = kind, duration = flightTime, distance = ((hitPosition or position) - origin).Magnitude}
+end
+function trajectory:draw(prediction, showPath)
+    self.prediction = prediction
+    local points = prediction.points
+    -- Preserve the shortened 75% path with at most 28 pooled dashes.
+    local endIndex = math.max(1, math.floor((#points - 1) * 0.75))
+    local count = showPath and math.min(22, endIndex) or 0
+    self.segmentCount = count
+    for i = 1, count do
+        local first = points[1 + math.floor((i - 1) * endIndex / count)]
+        local last = points[1 + math.floor(i * endIndex / count)]
+        local segment = self.segments[i]
+        if not segment then segment = self:marker(); self.segments[i] = segment end
+        local t = (i - 1) / math.max(count - 1, 1)
+        self:line(segment, first:Lerp(last, 0.08), first:Lerp(last, 0.92), 0.14,
+            Color3.fromRGB(65 + 130 * t, 225 - 100 * t, 255), 0.25)
+    end
+    for i = count + 1, #self.segments do self:style(self.segments[i], false) end
+    local normal, target = prediction.normal, prediction.target
+    local reference = math.abs(normal.Y) > 0.95 and Vector3.xAxis or Vector3.yAxis
+    local tangent = normal:Cross(reference).Unit
+    local bitangent = normal:Cross(tangent).Unit
+    local center = target + normal * 0.12
+    local color = prediction.kind == "landing" and Color3.fromRGB(95, 255, 170)
+        or (prediction.kind == "wall" and Color3.fromRGB(255, 105, 135) or Color3.fromRGB(255, 195, 80))
+    prediction.color, prediction.center = color, center
+    -- An unknown endpoint gets an amber beacon, never a false landing ring.
+    for i, part in ipairs(self.ring) do
+        if prediction.kind == "unknown" then self:style(part, false)
+        else
+            local a, b = (i - 1) * math.pi * 2 / 16, i * math.pi * 2 / 16
+            local first = center + (tangent * math.cos(a) + bitangent * math.sin(a)) * 2.2
+            local last = center + (tangent * math.cos(b) + bitangent * math.sin(b)) * 2.2
+            self:line(part, first, last, 0.13, color, 0.15)
+        end
+    end
+    self:style(self.landing, true, Vector3.new(0.45, 0.45, 0.45), CFrame.new(center), color, 0.12)
+    self:style(self.beacon, true, Vector3.new(0.32, 0.32, 0.32), CFrame.new(center + normal * 1.3), color, 0.1)
+    self.label.TextColor3 = color
+    self:updateLabel(os.clock())
+end
+function trajectory:updateLabel(now)
+    local prediction = self.prediction
+    if not prediction or not self.label then return end
+    if prediction.kind == "unknown" then
+        self.label.Text = "NO LANDING FOUND\nWithin 6 seconds of flight"
+        return
+    end
+    local seconds = self.flightEnds and math.max(0, self.flightEnds - now) or prediction.duration
+    local name = prediction.kind == "landing" and "LANDING (EST.)" or "WALL HIT (EST.)"
+    self.label.Text = string.format("%s\n%.0f studs  |  ~%.1fs", name, prediction.distance, seconds)
+end
+function trajectory:preview(dt)
+    local controller, movement = app.special, app.movement
+    if not cfg.spiritTrajectory or not app:valid(movement) or app.specialID ~= "Spirit" or not controller then
+        self:clear(); return
+    end
+    if self.flightEnds then return end -- launch prediction is retained until landing
+    if not movement.spirit or not controller.slingshot then self:clear(); return end
+    local root, statue = movement.RootPart, controller.statueRoot
+    if not statue or not statue.Parent or not controller.activeStatue then self:clear(); return end
+    self:ensure()
+    local origin, delta = statue.Position, statue.Position - root.Position
+    self.previewElapsed += math.max(0, dt or 0)
+    local moved = self.previewController ~= controller
+        or not self.previewOrigin or (origin - self.previewOrigin).Magnitude >= TRAJECTORY_PREVIEW_MOVE
+        or not self.previewDelta or (delta - self.previewDelta).Magnitude >= TRAJECTORY_PREVIEW_MOVE
+    if moved or self.previewElapsed >= TRAJECTORY_PREVIEW_FRAME then
+        self.previewElapsed = 0
+        self.previewController, self.previewOrigin, self.previewDelta = controller, origin, delta
+        self:draw(self:predict(controller, origin, delta, true), true)
+    end
+end
+function trajectory:animate(dt)
+    if not self.scope then return end
+    if not cfg.spiritTrajectory or not app:valid(app.movement) or self.previewController ~= app.special then
+        self:clear(); return
+    end
+    local now = os.clock()
+    if self.flightEnds and now >= self.flightEnds + 0.65 then self:clear(); return end
+    self.animationElapsed += math.max(0, dt or 0)
+    if self.animationElapsed < TRAJECTORY_FRAME then return end
+    -- RenderStep normally arrives at 60 Hz. Keep a remainder so a slow frame
+    -- does not permanently shift the animation clock.
+    self.animationElapsed -= TRAJECTORY_FRAME
+    local prediction = self.prediction
+    if not prediction then return end
+    -- Animate existing parts only: no tweens, extra connections, or raycasts.
+    local phase = (now * 0.7) % 1
+    for i = 1, self.segmentCount do
+        local segment = self.segments[i]
+        local t = (i - 1) / math.max(self.segmentCount - 1, 1)
+        local distance = math.abs(t - phase)
+        local glow = math.max(0, 1 - math.min(distance, 1 - distance) / 0.18)
+        local width = 0.13 + 0.08 * glow
+        local color = Color3.fromRGB(65 + 130 * t + 45 * glow, 225 - 100 * t + 25 * glow, 255)
+        self:style(segment, true, Vector3.new(width, width, segment.Size.Z), segment.CFrame, color, 0.35 - 0.3 * glow)
+    end
+    local pulse = (math.sin(now * 3) + 1) / 2
+    for _, part in ipairs(self.ring) do
+        if prediction.kind ~= "unknown" then
+            self:style(part, true, part.Size, part.CFrame, prediction.color, 0.1 + 0.15 * pulse)
+        end
+    end
+    self:style(self.beacon, true, Vector3.new(0.32, 0.32, 0.32),
+        CFrame.new(prediction.center + prediction.normal * (1.2 + 0.25 * pulse)), prediction.color, 0.1)
+    self:updateLabel(now)
+end
+function trajectory:tick()
+    local controller, movement = app.special, app.movement
+    if not cfg.spiritTrajectory or not app:valid(movement) or app.specialID ~= "Spirit" or not controller then
+        self:clear(); return
+    end
+    if self.flightEnds then
+        if os.clock() >= self.flightEnds + 0.65 then self:clear()
+        elseif not movement.spirit then return end
+    end
+    if not movement.spirit or not controller.slingshot then self:clear(); return end
+    local root, statue = movement.RootPart, controller.statueRoot
+    if not statue or not statue.Parent or not controller.activeStatue then self:clear(); return end
+    self:ensure()
+    self.flightEnds, self.previewController = nil, controller
+    self:draw(self:predict(controller, statue.Position, statue.Position - root.Position), true)
+end
+app.onSpiritLaunch = function(controller, origin, delta)
+    if not cfg.spiritTrajectory or not origin or not delta or not app:valid(controller.Movement) then return end
+    trajectory:ensure()
+    trajectory.previewController = controller
+    local prediction = trajectory:predict(controller, origin, delta)
+    trajectory.flightEnds = os.clock() + prediction.duration
+    trajectory:draw(prediction, false)
+end
+
+local function isAlternateColor(c)
+    if typeof(c) ~= "Color3" then return false end
+    local r, g, b = c.R, c.G, c.B
+    if math.abs(r - 0.258824) < 0.03 and math.abs(g - 1) < 0.03 and math.abs(b - 0.878431) < 0.03 then return true end
+    if math.abs(r - 74/255) < 0.03 and math.abs(g - 1) < 0.03 and math.abs(b - 195/255) < 0.03 then return true end
+    if math.abs(r - 98/255) < 0.03 and math.abs(g - 203/255) < 0.03 and math.abs(b - 1) < 0.03 then return true end
+    if math.abs(r - 53/255) < 0.03 and math.abs(g - 1) < 0.03 and math.abs(b - 205/255) < 0.03 then return true end
+    if math.abs(r - 53/255) < 0.03 and math.abs(g - 225/255) < 0.03 and math.abs(b - 1) < 0.03 then return true end
+    if math.abs(r - 151/255) < 0.03 and math.abs(g - 253/255) < 0.03 and math.abs(b - 1) < 0.03 then return true end
+    if math.abs(r - 0) < 0.03 and math.abs(g - 190/255) < 0.03 and math.abs(b - 1) < 0.03 then return true end
+    if math.abs(r - 76/255) < 0.04 and math.abs(g - 190/255) < 0.04 and math.abs(b - 1) < 0.04 then return true end
+    if g > 0.65 and b > 0.65 and r < 0.5 then return true end
+    return false
+end
+
+local function randomBrightColor()
+    return Color3.fromHSV(math.random(), 0.55 + math.random() * 0.45, 0.65 + math.random() * 0.35)
+end
+
+local visuals = {
+    hooked = false,
+    oldNewIndex = nil,
+    currentAltColor = Color3.new(0.706, 0.196, 1),
+    currentAltBeamColor = Color3.new(0.8, 0.3, 1),
+    currentAltUiColor = Color3.new(0.85, 0.5, 1),
+    currentAltSeq = ColorSequence.new(Color3.new(0.706, 0.196, 1)),
+    currentSkyColor = Color3.new(0.47, 0.16, 0.86),
+    originalSkyColors = {},
+    atmo = nil,
+}
+
+function visuals:syncColorsFromConfig()
+    local c = cfg.alternateColor
+    self.currentAltColor = Color3.new(c.r, c.g, c.b)
+    local h, s, v = self.currentAltColor:ToHSV()
+    self.currentAltBeamColor = Color3.fromHSV(h, math.max(0.15, s - 0.2), math.min(1, v + 0.1))
+    self.currentAltUiColor = Color3.fromHSV(h, math.max(0.2, s - 0.15), math.min(1, v + 0.15))
+    self.currentAltSeq = ColorSequence.new(self.currentAltColor)
+    local sc = cfg.skyboxColor
+    self.currentSkyColor = Color3.new(sc.r, sc.g, sc.b)
+end
+
+function visuals:transformSequence(seq)
+    local kps = seq.Keypoints
+    local changed = false
+    local newKps = {}
+    for _, kp in ipairs(kps) do
+        if isAlternateColor(kp.Value) then
+            changed = true
+            table.insert(newKps, ColorSequenceKeypoint.new(kp.Time, self.currentAltColor))
+        else
+            table.insert(newKps, kp)
+        end
+    end
+    return changed and ColorSequence.new(newKps) or seq
+end
+
+function visuals:patchBullet()
+    local projFolder = ReplicatedFirst:FindFirstChild("ClientModules")
+    local pc = projFolder and projFolder:FindFirstChild("ProjectileClient")
+    local pch = pc and pc:FindFirstChild("ProjectileClientHandler")
+    local projs = pch and pch:FindFirstChild("Projectiles")
+    local bcScript = projs and projs:FindFirstChild("BulletClient")
+    local bc = bcScript and bcScript:FindFirstChild("BulletColorblind")
+    if bc then
+        bc.Color = self.currentAltColor
+        for _, desc in ipairs(bc:GetDescendants()) do
+            if desc:IsA("ParticleEmitter") or desc:IsA("Beam") then
+                desc.Color = self.currentAltSeq
+            elseif desc:IsA("Highlight") then
+                desc.OutlineColor = self.currentAltColor
+                desc.FillColor = self.currentAltColor
+            end
+        end
+    end
+end
+
+function visuals:patchUI()
+    local pgui = plr:FindFirstChild("PlayerGui")
+    local gui = pgui and pgui:FindFirstChild("GUI")
+    if gui then
+        local gold = child(gui, "Main", "Misc", "Container", "Gold")
+        if gold and gold:IsA("ImageLabel") then gold.ImageColor3 = self.currentAltUiColor end
+        local gifts = gui:FindFirstChild("Gifts")
+        if gifts and gifts:IsA("TextLabel") then gifts.TextColor3 = self.currentAltUiColor end
+    end
+end
+
+function visuals:patchPools()
+    local pools = workspace:FindFirstChild("Item_Pools")
+    if not pools then return end
+    for _, name in ipairs({"SigilPartsGroup", "SigilBeamGroup", "SigilBlastGroup"}) do
+        local group = pools:FindFirstChild(name)
+        if group then
+            for _, item in ipairs(group:GetChildren()) do
+                if item:IsA("BasePart") then
+                    item.Color = self.currentAltColor
+                end
+            end
+        end
+    end
+end
+
+function visuals:ensureColorblindSetting()
+    local mod = child(ReplicatedFirst, "ClientModules", "Core", "PlayerData", "SettingsHandler")
+    local handler = import(mod)
+    if handler and type(handler.Get) == "function" and type(handler.Set) == "function" then
+        if not handler.Get({"Graphics", "Colorblind"}) then
+            handler.Set({"Graphics", "Colorblind"}, true)
+        end
+    end
+end
+
+function visuals:applyAlternateColor()
+    if not cfg.alternateColorEnabled then return end
+    self:syncColorsFromConfig()
+    self:ensureColorblindSetting()
+    self:patchBullet()
+    self:patchUI()
+    self:patchPools()
+end
+
+function visuals:applySkyboxColor()
+    if not cfg.skyboxColorEnabled then
+        self:restoreSkybox()
+        return
+    end
+    self:syncColorsFromConfig()
+    local color = self.currentSkyColor
+    local skyMod = workspace:FindFirstChild("SkyboxModule")
+    if skyMod then
+        for _, desc in ipairs(skyMod:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                if self.originalSkyColors[desc] == nil then
+                    self.originalSkyColors[desc] = desc.Color
+                end
+                desc.Color = color
+            end
+        end
+    end
+    local skyPart = workspace:FindFirstChild("SkyboxPart")
+    if skyPart and skyPart:IsA("BasePart") then
+        if self.originalSkyColors[skyPart] == nil then
+            self.originalSkyColors[skyPart] = skyPart.Color
+        end
+        skyPart.Color = color
+    end
+    local atmo = Lighting:FindFirstChild("LarpscapeAtmosphere")
+    if not atmo then
+        atmo = Instance.new("Atmosphere")
+        atmo.Name = "LarpscapeAtmosphere"
+        atmo.Density = 0.3
+        atmo.Haze = 2
+        atmo.Parent = Lighting
+    end
+    atmo.Color = color
+    self.atmo = atmo
+end
+
+function visuals:restoreSkybox()
+    for part, original in pairs(self.originalSkyColors) do
+        if part and part.Parent and typeof(original) == "Color3" then
+            pcall(function() part.Color = original end)
+        end
+    end
+    table.clear(self.originalSkyColors)
+    local atmo = Lighting:FindFirstChild("LarpscapeAtmosphere")
+    if atmo then
+        pcall(function() atmo:Destroy() end)
+    end
+    self.atmo = nil
+end
+
+function visuals:rollColor(target)
+    local col = randomBrightColor()
+    if target == "alternate" or target == "both" then
+        cfg.alternateColor = {r = col.R, g = col.G, b = col.B}
+        self:applyAlternateColor()
+    end
+    if target == "skybox" or target == "both" then
+        local skyCol = (target == "both") and randomBrightColor() or col
+        cfg.skyboxColor = {r = skyCol.R, g = skyCol.G, b = skyCol.B}
+        self:applySkyboxColor()
+    end
+    if app.syncUI then app.syncUI() end
+    config:touch()
+end
+
+function visuals:onRoundStart()
+    if cfg.alternateRandomRound then
+        self:rollColor("alternate")
+    else
+        self:applyAlternateColor()
+    end
+    if cfg.skyboxRandomRound then
+        self:rollColor("skybox")
+    else
+        self:applySkyboxColor()
+    end
+end
+
+function visuals:restore()
+    if self.hooked and self.oldNewIndex then
+        hookmetamethod(game, "__newindex", self.oldNewIndex)
+        self.hooked = false
+        self.oldNewIndex = nil
+    end
+    self:restoreSkybox()
+end
+
+function visuals:init()
+    if self.hooked then return end
+    self:syncColorsFromConfig()
+    self.oldNewIndex = hookmetamethod(game, "__newindex", function(selfObj, key, val)
+        if cfg.alternateColorEnabled then
+            if key == "Color" or key == "OutlineColor" or key == "FillColor" then
+                if typeof(val) == "Color3" and isAlternateColor(val) then
+                    val = visuals.currentAltColor
+                elseif typeof(val) == "ColorSequence" then
+                    val = visuals:transformSequence(val)
+                end
+            elseif key == "ImageColor3" or key == "TextColor3" then
+                if typeof(val) == "Color3" and isAlternateColor(val) then
+                    val = visuals.currentAltUiColor
+                end
+            end
+        end
+        return visuals.oldNewIndex(selfObj, key, val)
+    end)
+    self.hooked = true
+    app.scope:own(function()
+        visuals:restore()
+    end)
+    app.scope:connect(workspace.DescendantAdded, function(desc)
+        if cfg.skyboxColorEnabled and desc:IsA("BasePart") then
+            if desc.Name == "SkyboxPart" or (desc.Parent and desc.Parent.Name == "Skyspheres") then
+                task.defer(function()
+                    if cfg.skyboxColorEnabled and desc.Parent then
+                        if visuals.originalSkyColors[desc] == nil then
+                            visuals.originalSkyColors[desc] = desc.Color
+                        end
+                        desc.Color = visuals.currentSkyColor
+                    end
+                end)
+            end
+        end
+    end)
+    self:applyAlternateColor()
+    self:applySkyboxColor()
+end
+
+
+local discovery = {mobile = nil, retired = setmetatable({}, {__mode = "k"})}
+function app:detachSpecial(restore)
+    local controller, scope = self.special, self.specialScope
+    self.special, self.specialID, self.specialScope = nil, nil, nil
+    if controller then discovery.retired[controller] = true end
+    if scope then scope:close(restore) end
+    trajectory:clear()
+    glider:clear()
+end
+function app:detachMovement(restore)
+    local movement, scope = self.movement, self.movementScope
+    self.movement, self.movementScope = nil, nil
+    self.epoch += 1
+    if movement then discovery.retired[movement] = true end
+    self:detachSpecial(restore)
+    if scope then scope:close(restore) end
+    table.clear(upgrades.baselines)
+    table.clear(upgrades.applied)
+    magnet.applied = false
+    self.status = "Waiting for movement controller..."
+end
+function app:detachCharacter(character)
+    if character ~= self.character then return end
+    local scope = self.characterScope
+    self.removed[character] = true
+    self.character, self.characterScope = nil, nil
+    self:detachMovement(false)
+    if scope then scope:close(false) end
+    self.status = "Waiting for character..."
+end
+function app:bindCharacter(character)
+    if character == self.character or self.removed[character] or not self.scope.alive then return end
+    if self.character then self:detachCharacter(self.character) end
+    self.epoch += 1
+    self.character = character
+    local scope = Scope.new()
+    self.characterScope = scope
+    scope:connect(character.Destroying, function() self:detachCharacter(character) end)
+    scope:connect(character.AncestryChanged, function(_, parent)
+        if not parent then self:detachCharacter(character) end
+    end)
+    bell:bind(scope)
+    self.status = "Waiting for movement controller..."
+end
+function app:bindMovement(movement)
+    if movement == self.movement or discovery.retired[movement] or not self:valid(movement) then return end
+    if self.movement then self:detachMovement(false) end
+    self.movement = movement
+    local scope = Scope.new()
+    self.movementScope = scope
+    movementFeatures:bind(movement, scope)
+    self:queue("upgrades/spawn", function() upgrades:sync(true) end, 0.5, true)
+end
+function app:bindSpecial(controller, id)
+    if controller == self.special then return end
+    self:detachSpecial(false)
+    if type(controller) ~= "table" or discovery.retired[controller] or not self:valid(controller.Movement) then return end
+    self.special, self.specialID = controller, id
+    local scope = Scope.new()
+    self.specialScope = scope
+    movementFeatures:bindSpecial(controller, id, scope)
+    self.status = tostring(id or "Movement") .. " ready"
+end
+function discovery:tick()
+    if plr.Character ~= app.character then
+        if app.character then app:detachCharacter(app.character) end
+        if plr.Character then app:bindCharacter(plr.Character) end
+    end
+    if not app.character or app.removed[app.character] then return end
+    if not self.mobile then self.mobile = import(child(ReplicatedStorage, "Mobile", "MobileHandler")) end
+    local callback = self.mobile and self.mobile.Buttons and self.mobile.Buttons.Special
+    callback = callback and callback.Function
+    if type(callback) ~= "function" or type(debug.getupvalues) ~= "function" then
+        app.status = "Movement binding unavailable"
+        return
+    end
+    local current
+    for _, value in pairs(debug.getupvalues(callback)) do
+        if type(value) == "table" and value.Character == app.character
+            and value.Initialised == true and not self.retired[value] and app:valid(value) then current = value; break end
+    end
+    if current ~= app.movement then
+        if app.movement then app:detachMovement(false) end
+        if current then app:bindMovement(current) end
+    end
+    if current then app:bindSpecial(current.ActiveSpecial, current.SpecialID) end
+end
+function app:stop()
+    if not self.scope.alive or self.stopping then return end
+    self.stopping = true
+    if config.dirty then self:run("config/stop", function() config:save() end) end
+    self:run("visuals/restore", function() visuals:restore() end)
+    self:run("upgrades/restore", function() upgrades:restore() end)
+    self:run("magnet/restore", function() magnet:restore() end)
+    self.epoch += 1
+    table.clear(self.jobs)
+    self.scope:close(true)
+    if self.character then self:detachCharacter(self.character) else self:detachMovement(false) end
+    enemies:cleanupSpawnedVoidbreaker()
+    enemies:clear(true)
+    self.notify, self.syncUI, self.onSetting, self.onSpiritLaunch = nil, nil, nil, nil
+    discovery.mobile = nil
+    upgrades.handler, upgrades.source = nil, nil
+end
+function app:start()
+    self:run("visuals/init", function() visuals:init() end)
+    self.scope:connect(plr.CharacterAdded, function(character)
+        self:bindCharacter(character)
+        self:queue("visuals/spawn", function() visuals:onRoundStart() end, 0.3, true)
+    end)
+    self.scope:connect(plr.CharacterRemoving, function(character) self:detachCharacter(character) end)
+    if plr.Character then self:bindCharacter(plr.Character) end
+    local levelObj = ReplicatedStorage:FindFirstChild("Level")
+    if levelObj then
+        self.scope:connect(levelObj.Changed, function()
+            self:queue("visuals/level", function() visuals:onRoundStart() end, 0.5, true)
+            self:queue("enemies/level", function() enemies:onRoundStart() end, 0.6, true)
+        end)
+    end
+    local elapsed, roundValue, roundState = {discover = 0, upgrades = 0}, nil, nil
+    local busy = false
+    local animationName = "LarpscapeTrajectoryAnimation"
+    RunService:BindToRenderStep(animationName, Enum.RenderPriority.Last.Value + 3, function(dt)
+        if self.scope.alive and not self.stopping then
+            self:run("trajectory/preview", function() trajectory:preview(dt) end)
+            self:run("trajectory/animation", function() trajectory:animate(dt) end)
+            self:run("enemies/voidbreakerSolver", function() enemies:updateSwordMarks() end)
+        end
+    end)
+    self.scope:own(function() RunService:UnbindFromRenderStep(animationName) end)
+    self.scope:connect(RunService.Heartbeat, function(dt)
+        if busy or self.stopping then return end
+        busy = true
+        local ok, err = pcall(function()
+            self:drainJobs()
+            if not self.scope.alive then return end
+            self:run("glider", function() glider:tick() end)
+            self:run("enemies/springer", function() enemies:heartbeat() end)
+            elapsed.discover += dt
+            elapsed.upgrades += dt
+            if elapsed.discover >= 0.5 then
+                elapsed.discover = 0
+                self:run("discovery", function() discovery:tick() end)
+                local value = ReplicatedStorage:FindFirstChild("InRound")
+                local active = value and value.Value == true
+                if value ~= roundValue or active ~= roundState then
+                    roundValue, roundState = value, active
+                    table.clear(upgrades.baselines)
+                    table.clear(upgrades.applied)
+                    magnet:resetState()
+                    if active then
+                        self:queue("upgrades/round", function() upgrades:sync(true) end, 0.5, true)
+                        self:queue("visuals/round", function() visuals:onRoundStart() end, 0.2, true)
+                        self:queue("enemies/voidbreaker", function() enemies:onRoundStart() end, 0.3, true)
+                    else
+                        enemies:onRoundEnd()
+                    end
+                end
+                self:run("enemies", function() enemies:tick() end)
+                self:run("magnet", function() magnet:tick() end)
+            end
+            if elapsed.upgrades >= 1 then
+                elapsed.upgrades = 0
+                if cfg.autoRefreshUpgrades then self:run("upgrades", function() upgrades:sync(false) end) end
+            end
+            if config.dirty and os.clock() >= config.due then config:save() end
+        end)
+        busy = false
+        if not ok then self:report("scheduler", err) end
+    end)
+end
+
+
+local function buildUI()
+    local playerGui = plr:WaitForChild("PlayerGui")
+    local parent = playerGui
+    if type(gethui) == "function" then
+        local ok, result = pcall(gethui)
+        if ok and result then parent = result end
+    end
+
+    local old = parent:FindFirstChild("x8_Larpscape")
+    if old then old:Destroy() end
+
+    cfg.ui.width, cfg.ui.height = 760, 540
+    local camera = workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+    cfg.ui.x = math.clamp(cfg.ui.x or 120, 0, math.max(0, viewport.X - cfg.ui.width))
+    cfg.ui.y = math.clamp(cfg.ui.y or 80, 0, math.max(0, viewport.Y - cfg.ui.height))
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "x8_Larpscape"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.DisplayOrder = 999999
+    gui.Parent = parent
+    app.scope:own(function()
+        if gui then gui:Destroy() end
+    end)
+
+    local function state(value)
+        local s = {value = value}
+        function s:set(v) self.value = v end
+        return s
+    end
+
+    local window = {
+        position = state(Vector2.new(cfg.ui.x, cfg.ui.y)),
+        size = state(Vector2.new(cfg.ui.width, cfg.ui.height)),
+        isOpened = state(cfg.ui.opened ~= false),
+        isUncollapsed = state(true),
+    }
+
+    local C = {
+        bg = Color3.fromRGB(11, 12, 18),
+        panel = Color3.fromRGB(16, 18, 27),
+        panel2 = Color3.fromRGB(21, 23, 34),
+        panel3 = Color3.fromRGB(27, 30, 43),
+        border = Color3.fromRGB(48, 52, 72),
+        text = Color3.fromRGB(238, 240, 248),
+        muted = Color3.fromRGB(150, 155, 176),
+        accent = Color3.fromRGB(148, 72, 255),
+        accent2 = Color3.fromRGB(105, 52, 205),
+        green = Color3.fromRGB(76, 224, 140),
+        red = Color3.fromRGB(255, 91, 111),
+    }
+
+    local root = Instance.new("Frame")
+    root.Name = "Window"
+    root.Size = UDim2.fromOffset(cfg.ui.width, cfg.ui.height)
+    root.Position = UDim2.fromOffset(cfg.ui.x, cfg.ui.y)
+    root.BackgroundColor3 = C.bg
+    root.BorderSizePixel = 0
+    root.ClipsDescendants = true
+    root.Parent = gui
+
+    local rootCorner = Instance.new("UICorner")
+    rootCorner.CornerRadius = UDim.new(0, 12)
+    rootCorner.Parent = root
+
+    local rootStroke = Instance.new("UIStroke")
+    rootStroke.Color = C.border
+    rootStroke.Transparency = 0.15
+    rootStroke.Thickness = 1
+    rootStroke.Parent = root
+
+    local top = Instance.new("Frame")
+    top.Name = "TopBar"
+    top.Size = UDim2.new(1, 0, 0, 56)
+    top.BackgroundColor3 = C.panel
+    top.BorderSizePixel = 0
+    top.Parent = root
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.fromOffset(14, 3)
+    title.Size = UDim2.fromOffset(74, 38)
+    title.Font = Enum.Font.GothamBlack
+    title.Text = "x8"
+    title.TextSize = 29
+    title.TextColor3 = C.accent
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextYAlignment = Enum.TextYAlignment.Center
+    title.Rotation = -8
+    title.TextStrokeTransparency = 0.82
+    title.TextStrokeColor3 = C.accent
+    pcall(function()
+        title.FontFace = Font.new(
+            "rbxasset://fonts/families/GothamSSm.json",
+            Enum.FontWeight.Heavy,
+            Enum.FontStyle.Italic
+        )
+    end)
+    title.Parent = top
+
+    local subtitle = Instance.new("TextLabel")
+    subtitle.BackgroundTransparency = 1
+    subtitle.Position = UDim2.fromOffset(18, 31)
+    subtitle.Size = UDim2.fromOffset(240, 17)
+    subtitle.Font = Enum.Font.Gotham
+    subtitle.Text = "Larpscape control panel"
+    subtitle.TextSize = 12
+    subtitle.TextColor3 = C.muted
+    subtitle.TextXAlignment = Enum.TextXAlignment.Left
+    subtitle.Parent = top
+
+    local statusPill = Instance.new("TextLabel")
+    statusPill.AnchorPoint = Vector2.new(1, 0.5)
+    statusPill.Position = UDim2.new(1, -58, 0.5, 0)
+    statusPill.Size = UDim2.fromOffset(150, 30)
+    statusPill.BackgroundColor3 = C.panel3
+    statusPill.BorderSizePixel = 0
+    statusPill.Font = Enum.Font.GothamMedium
+    statusPill.TextSize = 11
+    statusPill.TextColor3 = C.muted
+    statusPill.Text = ""
+    statusPill.Visible = false
+    statusPill.Parent = top
+    local statusCorner = Instance.new("UICorner")
+    statusCorner.CornerRadius = UDim.new(0, 8)
+    statusCorner.Parent = statusPill
+
+    -- Player profile card: uses the player/client that executed the script.
+    -- It lives in the bottom-left corner of the X8 GUI window.
+    local profile = Instance.new("Frame")
+    profile.Name = "PlayerProfile"
+    profile.AnchorPoint = Vector2.new(0, 1)
+    profile.Position = UDim2.new(0, 12, 1, -12)
+    profile.Size = UDim2.fromOffset(210, 58)
+    profile.BackgroundColor3 = C.panel
+    profile.BackgroundTransparency = 0.06
+    profile.BorderSizePixel = 0
+    profile.ZIndex = 50
+    profile.Parent = root
+
+    local profileCorner = Instance.new("UICorner")
+    profileCorner.CornerRadius = UDim.new(0, 12)
+    profileCorner.Parent = profile
+
+    local profileStroke = Instance.new("UIStroke")
+    profileStroke.Color = C.border
+    profileStroke.Transparency = 0.2
+    profileStroke.Thickness = 1
+    profileStroke.Parent = profile
+
+    local avatar = Instance.new("ImageLabel")
+    avatar.Name = "Avatar"
+    avatar.AnchorPoint = Vector2.new(0, 0.5)
+    avatar.Position = UDim2.new(0, 8, 0.5, 0)
+    avatar.Size = UDim2.fromOffset(42, 42)
+    avatar.BackgroundColor3 = C.panel3
+    avatar.BorderSizePixel = 0
+    avatar.ZIndex = 51
+    avatar.Parent = profile
+
+    local avatarCorner = Instance.new("UICorner")
+    avatarCorner.CornerRadius = UDim.new(1, 0)
+    avatarCorner.Parent = avatar
+
+    local playerName = Instance.new("TextLabel")
+    playerName.Name = "DisplayName"
+    playerName.BackgroundTransparency = 1
+    playerName.Position = UDim2.fromOffset(58, 8)
+    playerName.Size = UDim2.new(1, -66, 0, 19)
+    playerName.Font = Enum.Font.GothamBold
+    playerName.TextSize = 14
+    playerName.TextColor3 = C.text
+    playerName.TextXAlignment = Enum.TextXAlignment.Left
+    playerName.TextTruncate = Enum.TextTruncate.AtEnd
+    playerName.ZIndex = 51
+    playerName.Text = plr.DisplayName
+    playerName.Parent = profile
+
+    local userName = Instance.new("TextLabel")
+    userName.Name = "Username"
+    userName.BackgroundTransparency = 1
+    userName.Position = UDim2.fromOffset(58, 29)
+    userName.Size = UDim2.new(1, -66, 0, 16)
+    userName.Font = Enum.Font.Gotham
+    userName.TextSize = 11
+    userName.TextColor3 = C.muted
+    userName.TextXAlignment = Enum.TextXAlignment.Left
+    userName.TextTruncate = Enum.TextTruncate.AtEnd
+    userName.ZIndex = 51
+    userName.Text = "@" .. plr.Name
+    userName.Parent = profile
+
+    local profileOnline = Instance.new("Frame")
+    profileOnline.Name = "OnlineDot"
+    profileOnline.Position = UDim2.fromOffset(43, 41)
+    profileOnline.Size = UDim2.fromOffset(8, 8)
+    profileOnline.BackgroundColor3 = C.green
+    profileOnline.BorderSizePixel = 0
+    profileOnline.ZIndex = 52
+    profileOnline.Parent = profile
+    local onlineCorner = Instance.new("UICorner")
+    onlineCorner.CornerRadius = UDim.new(1, 0)
+    onlineCorner.Parent = profileOnline
+
+    task.spawn(function()
+        local okThumb, image = pcall(function()
+            local content = Players:GetUserThumbnailAsync(
+                plr.UserId,
+                Enum.ThumbnailType.HeadShot,
+                Enum.ThumbnailSize.Size100x100
+            )
+            return content
+        end)
+        if okThumb and type(image) == "string" and image ~= "" and avatar.Parent then
+            avatar.Image = image
+        end
+    end)
+
+    local close = Instance.new("TextButton")
+    close.AnchorPoint = Vector2.new(1, 0.5)
+    close.Position = UDim2.new(1, -14, 0.5, 0)
+    close.Size = UDim2.fromOffset(28, 28)
+    close.BackgroundColor3 = C.panel3
+    close.BorderSizePixel = 0
+    close.Font = Enum.Font.GothamBold
+    close.Text = "×"
+    close.TextSize = 18
+    close.TextColor3 = C.text
+    close.AutoButtonColor = false
+    close.Parent = top
+    local closeCorner = Instance.new("UICorner")
+    closeCorner.CornerRadius = UDim.new(0, 8)
+    closeCorner.Parent = close
+    close.MouseButton1Click:Connect(function()
+        window.isOpened:set(false)
+        gui.Enabled = false
+        cfg.ui.opened = false
+        config:touch()
+    end)
+
+    local sidebar = Instance.new("Frame")
+    sidebar.Size = UDim2.new(0, 158, 1, -56)
+    sidebar.Position = UDim2.fromOffset(0, 56)
+    sidebar.BackgroundColor3 = C.panel
+    sidebar.BorderSizePixel = 0
+    sidebar.Parent = root
+
+    local sidePadding = Instance.new("UIPadding")
+    sidePadding.PaddingTop = UDim.new(0, 12)
+    sidePadding.PaddingLeft = UDim.new(0, 10)
+    sidePadding.PaddingRight = UDim.new(0, 10)
+    sidePadding.Parent = sidebar
+
+    local sideLayout = Instance.new("UIListLayout")
+    sideLayout.Padding = UDim.new(0, 7)
+    sideLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    sideLayout.Parent = sidebar
+
+    local content = Instance.new("Frame")
+    content.Position = UDim2.fromOffset(158, 56)
+    content.Size = UDim2.new(1, -158, 1, -56)
+    content.BackgroundColor3 = C.bg
+    content.BorderSizePixel = 0
+    content.Parent = root
+
+    local pagesHolder = Instance.new("Frame")
+    pagesHolder.Size = UDim2.new(1, 0, 1, -42)
+    pagesHolder.BackgroundTransparency = 1
+    pagesHolder.Parent = content
+
+    local footer = Instance.new("TextLabel")
+    footer.AnchorPoint = Vector2.new(0, 1)
+    footer.Position = UDim2.new(0, 14, 1, -10)
+    footer.Size = UDim2.new(1, -28, 0, 25)
+    footer.BackgroundTransparency = 1
+    footer.Font = Enum.Font.Gotham
+    footer.TextSize = 11
+    footer.TextColor3 = C.muted
+    footer.TextXAlignment = Enum.TextXAlignment.Left
+    footer.TextTruncate = Enum.TextTruncate.AtEnd
+    footer.Parent = content
+
+    local controls = {}
+    local pages = {}
+    local tabs = {}
+    local dynamicLabels = {}
+    local sectionCounter = 0
+
+    local function rounded(obj, radius)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, radius or 8)
+        c.Parent = obj
+        return c
+    end
+
+    local function stroke(obj, color, transparency)
+        local s = Instance.new("UIStroke")
+        s.Color = color or C.border
+        s.Transparency = transparency == nil and 0 or transparency
+        s.Thickness = 1
+        s.Parent = obj
+        return s
+    end
+
+    local function makeButton(parent, text, h)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(1, 0, 0, h or 38)
+        b.BackgroundColor3 = C.panel2
+        b.BorderSizePixel = 0
+        b.AutoButtonColor = false
+        b.Font = Enum.Font.GothamMedium
+        b.Text = text
+        b.TextColor3 = C.text
+        b.TextSize = 12
+        b.TextXAlignment = Enum.TextXAlignment.Left
+        b.Parent = parent
+        rounded(b, 8)
+        b.MouseEnter:Connect(function() b.BackgroundColor3 = C.panel3 end)
+        b.MouseLeave:Connect(function() b.BackgroundColor3 = C.panel2 end)
+        return b
+    end
+
+    local function tab(titleText, layoutOrder)
+        local button = Instance.new("TextButton")
+        button.LayoutOrder = layoutOrder
+        button.Size = UDim2.new(1, 0, 0, 38)
+        button.BackgroundColor3 = C.panel2
+        button.BorderSizePixel = 0
+        button.AutoButtonColor = false
+        button.Font = Enum.Font.GothamMedium
+        button.Text = titleText
+        button.TextSize = 12
+        button.TextColor3 = C.muted
+        button.Parent = sidebar
+        rounded(button, 8)
+
+        local page = Instance.new("ScrollingFrame")
+        page.Name = titleText .. "Page"
+        page.Size = UDim2.new(1, -28, 1, -10)
+        page.Position = UDim2.fromOffset(14, 5)
+        page.BackgroundTransparency = 1
+        page.BorderSizePixel = 0
+        page.ScrollBarThickness = 4
+        page.ScrollBarImageTransparency = 0.35
+        page.CanvasSize = UDim2.new(0, 0, 0, 0)
+        page.Visible = false
+        page.Parent = pagesHolder
+        local pad = Instance.new("UIPadding")
+        pad.PaddingBottom = UDim.new(0, 12)
+        pad.Parent = page
+        local layout = Instance.new("UIListLayout")
+        layout.Padding = UDim.new(0, 10)
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        layout.Parent = page
+        layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            page.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 16)
+        end)
+
+        local item = {title = titleText, button = button, page = page, sections = {}}
+        table.insert(tabs, item)
+        pages[titleText] = item
+        button.MouseButton1Click:Connect(function()
+            for _, t in ipairs(tabs) do
+                t.page.Visible = false
+                t.button.BackgroundColor3 = C.panel2
+                t.button.TextColor3 = C.muted
+            end
+            page.Visible = true
+            button.BackgroundColor3 = C.accent2
+            button.TextColor3 = C.text
+            cfg.ui.tab = titleText
+            config:touch()
+        end)
+        return item
+    end
+
+    local main = tab("Main", 1)
+    local classes = tab("Classes", 2)
+    local upgradeTab = tab("Upgrades", 3)
+    local enemyTab = tab("Ememy", 4)
+    local configTab = tab("Config", 5)
+
+    local function addSection(parentPage, titleText, layoutOrder)
+        sectionCounter += 1
+        local card = Instance.new("Frame")
+        card.LayoutOrder = layoutOrder or sectionCounter
+        card.Size = UDim2.new(1, 0, 0, 44)
+        card.BackgroundColor3 = C.panel
+        card.BorderSizePixel = 0
+        card.AutomaticSize = Enum.AutomaticSize.Y
+        card.Parent = parentPage
+        rounded(card, 10)
+        stroke(card, C.border, 0.35)
+
+        local header = Instance.new("TextButton")
+        header.Size = UDim2.new(1, 0, 0, 44)
+        header.BackgroundTransparency = 1
+        header.BorderSizePixel = 0
+        header.Font = Enum.Font.GothamBold
+        header.TextSize = 13
+        header.TextColor3 = C.text
+        header.TextXAlignment = Enum.TextXAlignment.Left
+        header.Text = "  ▼  " .. titleText
+        header.AutoButtonColor = false
+        header.Parent = card
+
+        local body = Instance.new("Frame")
+        body.Position = UDim2.fromOffset(12, 44)
+        body.Size = UDim2.new(1, -24, 0, 0)
+        body.BackgroundTransparency = 1
+        body.AutomaticSize = Enum.AutomaticSize.Y
+        body.Parent = card
+        local bodyLayout = Instance.new("UIListLayout")
+        bodyLayout.Padding = UDim.new(0, 7)
+        bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        bodyLayout.Parent = body
+        local bodyPad = Instance.new("UIPadding")
+        bodyPad.PaddingBottom = UDim.new(0, 12)
+        bodyPad.Parent = body
+
+        local opened = cfg.ui.sections[parentPage.Name .. "/" .. titleText] ~= false
+        body.Visible = opened
+        if not opened then header.Text = "  ▶  " .. titleText end
+        header.MouseButton1Click:Connect(function()
+            opened = not opened
+            body.Visible = opened
+            header.Text = (opened and "  ▼  " or "  ▶  ") .. titleText
+            cfg.ui.sections[parentPage.Name .. "/" .. titleText] = opened
+            config:touch()
+        end)
+
+        return card, body
+    end
+
+    local function addLabel(body, textOrFunction, small)
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 0, small and 30 or 24)
+        label.AutomaticSize = Enum.AutomaticSize.Y
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.Gotham
+        label.TextSize = small and 11 or 12
+        label.TextColor3 = small and C.muted or C.text
+        label.TextWrapped = true
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = type(textOrFunction) == "function" and tostring(textOrFunction()) or tostring(textOrFunction)
+        label.Parent = body
+        if type(textOrFunction) == "function" then
+            table.insert(dynamicLabels, {label = label, fn = textOrFunction})
+        end
+        return label
+    end
+
+    local function addToggle(body, labelText, key)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 38)
+        row.BackgroundTransparency = 1
+        row.Parent = body
+        local text = Instance.new("TextLabel")
+        text.Size = UDim2.new(1, -60, 1, 0)
+        text.BackgroundTransparency = 1
+        text.Font = Enum.Font.GothamMedium
+        text.TextSize = 12
+        text.TextColor3 = C.text
+        text.TextXAlignment = Enum.TextXAlignment.Left
+        text.Text = labelText
+        text.Parent = row
+
+        local sw = Instance.new("TextButton")
+        sw.AnchorPoint = Vector2.new(1, 0.5)
+        sw.Position = UDim2.new(1, 0, 0.5, 0)
+        sw.Size = UDim2.fromOffset(42, 22)
+        sw.BackgroundColor3 = C.panel3
+        sw.BorderSizePixel = 0
+        sw.AutoButtonColor = false
+        sw.Text = ""
+        sw.Parent = row
+        rounded(sw, 11)
+        stroke(sw, C.border, 0.2)
+        local knob = Instance.new("Frame")
+        knob.Size = UDim2.fromOffset(16, 16)
+        knob.AnchorPoint = Vector2.new(0, 0.5)
+        knob.Position = UDim2.new(0, 3, 0.5, 0)
+        knob.BackgroundColor3 = C.muted
+        knob.BorderSizePixel = 0
+        knob.Parent = sw
+        rounded(knob, 8)
+
+        local control = {kind = "toggle", key = key, last = cfg[key], onChanged = nil}
+        function control:set(value)
+            self.last = value == true
+            sw.BackgroundColor3 = self.last and C.accent2 or C.panel3
+            knob.Position = self.last and UDim2.new(1, -19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+            knob.BackgroundColor3 = self.last and Color3.new(1, 1, 1) or C.muted
+        end
+        control:set(cfg[key])
+        controls[key] = control
+        sw.MouseButton1Click:Connect(function()
+            local nextValue = not (cfg[key] == true)
+            config:set(key, nextValue)
+            control:set(nextValue)
+            if control.onChanged then
+                pcall(control.onChanged, nextValue)
+            end
+        end)
+        return control
+    end
+
+    local function addSlider(body, labelText, key, step)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 56)
+        row.BackgroundTransparency = 1
+        row.Parent = body
+        local label = Instance.new("TextLabel")
+        label.Position = UDim2.fromOffset(0, 0)
+        label.Size = UDim2.new(1, -80, 0, 20)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.GothamMedium
+        label.TextSize = 12
+        label.TextColor3 = C.text
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Text = labelText
+        label.Parent = row
+        local valueLabel = Instance.new("TextLabel")
+        valueLabel.AnchorPoint = Vector2.new(1, 0)
+        valueLabel.Position = UDim2.new(1, 0, 0, 0)
+        valueLabel.Size = UDim2.fromOffset(72, 20)
+        valueLabel.BackgroundTransparency = 1
+        valueLabel.Font = Enum.Font.GothamBold
+        valueLabel.TextSize = 12
+        valueLabel.TextColor3 = C.accent
+        valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+        valueLabel.Parent = row
+
+        local bar = Instance.new("Frame")
+        bar.Position = UDim2.fromOffset(0, 29)
+        bar.Size = UDim2.new(1, 0, 0, 10)
+        bar.BackgroundColor3 = C.panel3
+        bar.BorderSizePixel = 0
+        bar.Parent = row
+        rounded(bar, 5)
+        local fill = Instance.new("Frame")
+        fill.Size = UDim2.new(0, 0, 1, 0)
+        fill.BackgroundColor3 = C.accent
+        fill.BorderSizePixel = 0
+        fill.Parent = bar
+        rounded(fill, 5)
+        local hit = Instance.new("TextButton")
+        hit.Size = UDim2.new(1, 14, 1, 20)
+        hit.Position = UDim2.fromOffset(-7, -5)
+        hit.BackgroundTransparency = 1
+        hit.Text = ""
+        hit.Parent = bar
+        local dot = Instance.new("Frame")
+        dot.AnchorPoint = Vector2.new(0.5, 0.5)
+        dot.Size = UDim2.fromOffset(16, 16)
+        dot.BackgroundColor3 = Color3.new(1, 1, 1)
+        dot.BorderSizePixel = 0
+        dot.Parent = bar
+        rounded(dot, 8)
+
+        local range = limits[key]
+        local minValue, maxValue = range[1], range[2]
+        local control = {kind = "slider", key = key, step = step or 1, last = cfg[key], enabled = true, normalValueLabel = nil}
+        local function roundStep(v)
+            local q = math.floor(((v - minValue) / control.step) + 0.5)
+            return math.clamp(minValue + q * control.step, minValue, maxValue)
+        end
+        function control:set(value)
+            local v = tonumber(value) or minValue
+            v = roundStep(v)
+            self.last = v
+            local alpha = (v - minValue) / (maxValue - minValue)
+            fill.Size = UDim2.new(alpha, 0, 1, 0)
+            dot.Position = UDim2.new(alpha, 0, 0.5, 0)
+            local precision = self.step < 0.1 and 2 or (self.step < 1 and 1 or 0)
+            valueLabel.Text = string.format("%." .. precision .. "f", v)
+            if self.enabled then
+                valueLabel.TextColor3 = C.accent
+                label.TextColor3 = C.text
+                fill.BackgroundColor3 = C.accent
+                dot.BackgroundColor3 = Color3.new(1, 1, 1)
+            end
+        end
+        function control:setEnabled(enabled, displayText)
+            self.enabled = enabled ~= false
+            hit.Active = self.enabled
+            hit.Selectable = self.enabled
+            label.TextColor3 = self.enabled and C.text or C.muted
+            valueLabel.TextColor3 = self.enabled and C.accent or C.muted
+            fill.BackgroundColor3 = self.enabled and C.accent or C.panel2
+            dot.BackgroundColor3 = self.enabled and Color3.new(1, 1, 1) or C.muted
+            bar.BackgroundColor3 = self.enabled and C.panel3 or C.panel2
+            if displayText ~= nil then
+                valueLabel.Text = tostring(displayText)
+            elseif self.enabled then
+                local precision = self.step < 0.1 and 2 or (self.step < 1 and 1 or 0)
+                valueLabel.Text = string.format("%." .. precision .. "f", self.last)
+            end
+        end
+        control:set(cfg[key])
+        controls[key] = control
+
+        local dragging = false
+        local function setFromX(x)
+            if not control.enabled then return end
+            local a = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+            local v = minValue + (maxValue - minValue) * a
+            v = roundStep(v)
+            config:set(key, v)
+            control:set(v)
+        end
+        hit.InputBegan:Connect(function(input)
+            if not control.enabled then return end
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                setFromX(input.Position.X)
+            end
+        end)
+        app.scope:connect(UserInputService.InputChanged, function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                setFromX(input.Position.X)
+            end
+        end)
+        app.scope:connect(UserInputService.InputEnded, function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+        return control
+    end
+
+    local function addColor(body, labelText, key)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 42)
+        row.BackgroundTransparency = 1
+        row.Parent = body
+        local text = Instance.new("TextLabel")
+        text.Size = UDim2.new(1, -220, 1, 0)
+        text.BackgroundTransparency = 1
+        text.Font = Enum.Font.GothamMedium
+        text.TextSize = 12
+        text.TextColor3 = C.text
+        text.Text = labelText
+        text.TextXAlignment = Enum.TextXAlignment.Left
+        text.Parent = row
+        local boxes = {}
+        local names = {"R", "G", "B"}
+        local value = cfg[key]
+        for i, n in ipairs(names) do
+            local box = Instance.new("TextBox")
+            box.Position = UDim2.new(1, -210 + (i - 1) * 70, 0.5, -15)
+            box.Size = UDim2.fromOffset(62, 30)
+            box.BackgroundColor3 = C.panel3
+            box.BorderSizePixel = 0
+            box.ClearTextOnFocus = false
+            box.Font = Enum.Font.GothamMedium
+            box.TextSize = 11
+            box.TextColor3 = C.text
+            box.PlaceholderText = n
+            box.Text = tostring(math.floor((value and value[string.lower(n)] or 0) * 255 + 0.5))
+            box.Parent = row
+            rounded(box, 7)
+            stroke(box, C.border, 0.25)
+            boxes[i] = box
+        end
+        local preview = Instance.new("Frame")
+        preview.Position = UDim2.new(1, -246, 0.5, -10)
+        preview.Size = UDim2.fromOffset(26, 20)
+        preview.BorderSizePixel = 0
+        preview.Parent = row
+        rounded(preview, 6)
+
+        local control = {kind = "color3", key = key, last = Color3.new(value.r, value.g, value.b)}
+        function control:set(tbl)
+            if type(tbl) ~= "table" then return end
+            local col = Color3.new(math.clamp(tbl.r or 0, 0, 1), math.clamp(tbl.g or 0, 0, 1), math.clamp(tbl.b or 0, 0, 1))
+            self.last = col
+            local comps = {col.R, col.G, col.B}
+            for i, box in ipairs(boxes) do box.Text = tostring(math.floor(comps[i] * 255 + 0.5)) end
+            preview.BackgroundColor3 = col
+        end
+        controls[key] = control
+        control:set(value)
+        local function commit()
+            local rgb = {}
+            for i, box in ipairs(boxes) do rgb[i] = math.clamp(tonumber(box.Text) or 0, 0, 255) / 255 end
+            local tbl = {r = rgb[1], g = rgb[2], b = rgb[3]}
+            config:set(key, tbl)
+            control:set(tbl)
+        end
+        for _, box in ipairs(boxes) do
+            box.FocusLost:Connect(commit)
+        end
+        return control
+    end
+
+    local function addButton(body, text, callback)
+        local b = makeButton(body, text, 36)
+        local left = Instance.new("UIPadding")
+        left.PaddingLeft = UDim.new(0, 12)
+        left.Parent = b
+        b.MouseButton1Click:Connect(function()
+            app:run("button/" .. text, callback)
+        end)
+        return b
+    end
+
+    local function setupMain()
+        local _, gift = addSection(main.page, "Gift Magnet Range")
+        local magnetRangeControl = addSlider(gift, "Collection Range", "magnetRange", 0.01)
+        local evilMagnetControl = addToggle(gift, "Evil Gift Magnet (300 range)", "evilGiftMagnet")
+        local magnetModeLabel = addLabel(gift, "Normal range active.", true)
+
+        local function updateMagnetMode()
+            local evil = cfg.evilGiftMagnet == true
+            if magnetRangeControl and magnetRangeControl.setEnabled then
+                magnetRangeControl:setEnabled(not evil, evil and "300" or nil)
+            end
+            if magnetModeLabel then
+                magnetModeLabel.Text = evil
+                    and "Evil Magnet active: collection range is fixed at 300."
+                    or string.format("Normal range active: %.2f.", tonumber(cfg.magnetRange) or 1)
+            end
+        end
+        evilMagnetControl.onChanged = updateMagnetMode
+        updateMagnetMode()
+
+        addButton(gift, "Reset Collection Range", function()
+            config:set("magnetRange", 1)
+            config:set("evilGiftMagnet", false)
+            updateMagnetMode()
+            if app.syncUI then app.syncUI() end
+        end)
+
+        local _, boost = addSection(main.page, "E Boost (Glider)")
+        addToggle(boost, "Enable E Boost", "eBoostEnabled")
+        addSlider(boost, "Speed Multiplier", "eBoostMult", 0.01)
+        addLabel(boost, "Hold E while using Glider. Glider Speed takes priority when enabled.", true)
+
+        local _, alt = addSection(main.page, "Alternate Color")
+        addToggle(alt, "Enable Custom Color", "alternateColorEnabled")
+        addColor(alt, "Pick Color", "alternateColor")
+        addToggle(alt, "Random Color Every Round", "alternateRandomRound")
+        addButton(alt, "Roll Random Color Now", function() visuals:rollColor("alternate") end)
+
+        local _, sky = addSection(main.page, "Skybox Color")
+        addToggle(sky, "Enable Custom Skybox", "skyboxColorEnabled")
+        addColor(sky, "Pick Skybox Color", "skyboxColor")
+        addToggle(sky, "Random Skybox Every Round", "skyboxRandomRound")
+        addButton(sky, "Roll Random Skybox Now", function() visuals:rollColor("skybox") end)
+
+        local _, panic = addSection(main.page, "Panic")
+        addButton(panic, "Unload Larpscape", function() app:stop() end)
+    end
+
+    local function setupClasses()
+        local _, gliderClass = addSection(classes.page, "Glider")
+        addToggle(gliderClass, "Enable Glider Speed", "gliderSpeedEnabled")
+        addSlider(gliderClass, "Glider Speed", "gliderSpeed", 0.05)
+        addSlider(gliderClass, "Stamina Extending", "gliderStaminaExtension", 0.1)
+        addToggle(gliderClass, "Inf Stamina", "gliderInfiniteStamina")
+        addLabel(gliderClass, "Speed applies while gliding, including toggle ability mode.", true)
+        addLabel(gliderClass, "Stamina Extending: 2x halves charge drain; 1x is normal. Inf Stamina keeps charge full.", true)
+
+        local _, universal = addSection(classes.page, "Universal")
+        addToggle(universal, "Soft Anti Bonk", "softAntiBonk")
+        addToggle(universal, "Hard Anti Bonk", "hardAntiBonk")
+        addSlider(universal, "SharkTail Ability Strength", "sharkTailAbilityStrength", 0.1)
+        addSlider(universal, "SharkTail Alt Ability Strength", "sharkTailAltAbilityStrength", 0.1)
+
+        local _, diver = addSection(classes.page, "Diver")
+        addToggle(diver, "Collection Mode", "diverCollectionMode")
+        addToggle(diver, "Q: Toggle Collection Mode", "diverModeHotkeyEnabled")
+        addToggle(diver, "Repeated Air Dives", "diverRepeatedAirDives")
+        addSlider(diver, "Main Launch Multiplier", "diverMainMultiplier", 0.1)
+        addSlider(diver, "Alt Launch Multiplier", "diverAltMultiplier", 0.1)
+        addSlider(diver, "Collection Vertical Multiplier", "diverCollectionVerticalMultiplier", 0.05)
+
+        local _, spirit = addSection(classes.page, "Spirit")
+        addSlider(spirit, "Fling Strength", "spiritFlingStrength", 0.01)
+        addSlider(spirit, "Fling Falloff Distance", "spiritFlingDistance", 1)
+        addLabel(spirit, "Horizontal boost fades to 1.00x at the selected distance.", true)
+        addLabel(spirit, function()
+            local controller, movement = app.special, app.movement
+            if app.specialID ~= "Spirit" or not controller or not app:valid(movement) then return "Spirit: waiting for class" end
+            local statue = controller.statueRoot
+            if not movement.spirit or not statue or not statue.Parent then return "Spirit: ready" end
+            return string.format("Effective strength: %.2fx", movementFeatures:spiritMultiplier((statue.Position - movement.RootPart.Position).Magnitude))
+        end, true)
+        addToggle(spirit, "Infinite Stamina", "spiritInfiniteStamina")
+        addToggle(spirit, "No Launch Cooldown", "spiritNoLaunchCooldown")
+        addToggle(spirit, "Workspace Landing Trajectory", "spiritTrajectory")
+
+        local _, charger = addSection(classes.page, "Charger")
+        addToggle(charger, "No Cooldown", "chargerNoCooldown")
+        addToggle(charger, "Enable Turn Speed", "chargerTurnSpeedEnabled")
+        addSlider(charger, "Turn Speed Multiplier", "chargerTurnSpeed", 0.01)
+        addToggle(charger, "Enable Charge Speed", "chargerSpeedEnabled")
+        addSlider(charger, "Charge Speed Multiplier", "chargerSpeed", 0.01)
+
+        local _, grapple = addSection(classes.page, "Grappler")
+        addToggle(grapple, "Custom Cast Range", "grapplerRangeEnabled")
+        addSlider(grapple, "Cast Range", "grapplerRange", 10)
+        addSlider(grapple, "Strength Factor", "grapplerStrength", 1)
+        addButton(grapple, "Restore Default Range", function()
+            config:set("grapplerRangeEnabled", false)
+            if app.syncUI then app.syncUI() end
+        end)
+    end
+
+    local function setupEnemies()
+        local _, kolona = addSection(enemyTab.page, "Kolona")
+        addToggle(kolona, "Auto Remove Kolona", "kolonaAutoDestroy")
+        addButton(kolona, "Remove Kolona Now", function() enemies:destroyKolona() end)
+
+        local _, bellSection = addSection(enemyTab.page, "Bell")
+        addSlider(bellSection, "Camera Distortion Reduction (%)", "bellDistortionReduction", 1)
+        addToggle(bellSection, "Block Camera Distortion", "bellBreakDistortion")
+        addLabel(bellSection, "Reduces camera warping, including Bell wobble.", true)
+
+        local _, tele = addSection(enemyTab.page, "Telefragger")
+        addToggle(tele, "Auto Break Telefragger AI", "telefraggerAutoBreakAI")
+
+        local _, voidbreaker = addSection(enemyTab.page, "Voidbreaker")
+        addToggle(voidbreaker, "Sword Path Solver", "voidbreakerSolver")
+        addToggle(voidbreaker, "Auto Destroy", "voidbreakerAutoDestroy")
+        addButton(voidbreaker, "Remove Voidbreaker Now", function() enemies:destroyVoidbreaker() end)
+        addButton(voidbreaker, "Add Voidbreaker This Round or Next Round", function()
+            enemies:spawnVoidbreaker()
+            if app.notify then app.notify("Voidbreaker added!", "Voidbreaker") end
+        end)
+        addToggle(voidbreaker, "Auto Spawn Every Round", "voidbreakerAutoSpawn")
+        addSlider(voidbreaker, "Chance to appear", "voidbreakerChance", 1)
+        addLabel(voidbreaker, function()
+            local lvl = ReplicatedStorage:FindFirstChild("Level")
+            local currentLvl = lvl and lvl.Value or 0
+            local natural = currentLvl >= 15 and "Active (Level 15+)" or string.format("Locked (Requires Level 15, current: %d)", currentLvl)
+            return string.format("Configured chance: %d%% | Natural spawn: %s", cfg.voidbreakerChance, natural)
+        end, true)
+
+        local _, springer = addSection(enemyTab.page, "Springer")
+        addToggle(springer, "Drop Spot Warning SFX", "springerWarningSound")
+        addToggle(springer, "crushn't", "springerCrushnt")
+        addLabel(springer, "Alerts when inside landing zone. Crushn't prevents landing kill.", true)
+    end
+
+    local function setupUpgrades()
+        local _, info = addSection(upgradeTab.page, "Info")
+        addLabel(info, "Saved upgrade counts apply when a round is active.", true)
+        addToggle(info, "Auto Refresh Upgrades", "autoRefreshUpgrades")
+        addButton(info, "Apply Saved Upgrades Now", function() upgrades:sync(true) end)
+        local groups = {
+            {"Featured", {"MatrixTetrahedron", "HighlightGifts", "HighlightTripmines", "DoubleJump"}},
+            {"Movement", {"Adrenaline", "SportShoes", "IceSkates", "SwiftnessRing", "AdvancedGravityCoil", "SharkTail"}},
+            {"Radar & Detection", {"RadarPlayer", "RadarInstruments", "RadarAltars", "EnemyOnTop"}},
+            {"Abilities & Items", {"TheOrb", "GiftMagnet", "NinjaBelt", "Helmet", "PocketBell", "GraceWings", "RealWings"}},
+        }
+        for _, group in ipairs(groups) do
+            local _, parentBody = addSection(upgradeTab.page, group[1])
+            for _, name in ipairs(group[2]) do
+                addLabel(parentBody, function() return name .. ": " .. tostring(cfg.upgrades[name] or 0) end)
+                addButton(parentBody, "+ " .. name, function() upgrades:change(name, 1) end)
+                addButton(parentBody, "- " .. name, function() upgrades:change(name, -1) end)
+            end
+        end
+    end
+
+    local function setupConfig()
+        local _, settings = addSection(configTab.page, "Configuration")
+        addLabel(settings, "All controls and window settings auto-save.", true)
+        addButton(settings, "Save Config", function()
+            local saved, err = config:save()
+            if app.notify then app.notify(saved and "Config saved" or tostring(err), "Config") end
+        end)
+        local function applyLoaded()
+            if app.syncUI then app.syncUI() end
+            if app.onSetting then app.onSetting("all") end
+            upgrades:reconcile()
+            config:touch()
+        end
+        addButton(settings, "Load Config", function()
+            local loaded, err = config:load()
+            if loaded then applyLoaded() end
+            if app.notify then app.notify(loaded and "Config loaded" or tostring(err), "Config") end
+        end)
+        addButton(settings, "Reset Config", function()
+            cfg = copy(defaults)
+            cfg.ui.width, cfg.ui.height = 760, 540
+            if app.syncUI then app.syncUI() end
+            if app.onSetting then app.onSetting("all") end
+            config:touch()
+        end)
+        addButton(settings, "Rejoin", function()
+            local saved, err = config:save()
+            if not saved then
+                if app.notify then app.notify(tostring(err), "Save failed") end
+                return
+            end
+            local ok, teleportError = pcall(function()
+                if #Players:GetPlayers() > 1 and game.JobId ~= "" then
+                    TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, plr)
+                else
+                    TeleportService:Teleport(game.PlaceId, plr)
+                end
+            end)
+            if not ok and app.notify then app.notify(tostring(teleportError), "Rejoin failed") end
+        end)
+
+        local _, interface = addSection(configTab.page, "Interface")
+        addButton(interface, "Reset Window Position", function()
+            cfg.ui.x, cfg.ui.y = 120, 80
+            root.Position = UDim2.fromOffset(cfg.ui.x, cfg.ui.y)
+            window.position:set(Vector2.new(cfg.ui.x, cfg.ui.y))
+            config:touch()
+        end)
+        addLabel(interface, "K = open / close GUI", true)
+        addLabel(interface, "Drag the top bar to move the window.", true)
+
+        local _, about = addSection(configTab.page, "About")
+        addLabel(about, "x8 / Larpscape", false)
+        addLabel(about, "Feature controls are wired directly to the existing config and backend functions.", true)
+    end
+
+    setupMain()
+    setupClasses()
+    setupEnemies()
+    setupUpgrades()
+    setupConfig()
+
+    app.notify = function(message, titleText)
+        local holder = gui:FindFirstChild("Notifications")
+        if not holder then
+            holder = Instance.new("Frame")
+            holder.Name = "Notifications"
+            holder.AnchorPoint = Vector2.new(1, 0)
+            holder.Position = UDim2.new(1, -20, 0, 20)
+            holder.Size = UDim2.fromOffset(320, 400)
+            holder.BackgroundTransparency = 1
+            holder.Parent = gui
+            local l = Instance.new("UIListLayout")
+            l.Padding = UDim.new(0, 8)
+            l.HorizontalAlignment = Enum.HorizontalAlignment.Right
+            l.SortOrder = Enum.SortOrder.LayoutOrder
+            l.Parent = holder
+        end
+        local note = Instance.new("Frame")
+        note.Size = UDim2.fromOffset(300, 64)
+        note.BackgroundColor3 = C.panel
+        note.BorderSizePixel = 0
+        note.Parent = holder
+        rounded(note, 10)
+        stroke(note, C.border, 0.2)
+        local h = Instance.new("TextLabel")
+        h.Position = UDim2.fromOffset(12, 8)
+        h.Size = UDim2.new(1, -24, 0, 18)
+        h.BackgroundTransparency = 1
+        h.Font = Enum.Font.GothamBold
+        h.TextSize = 12
+        h.TextColor3 = C.text
+        h.Text = titleText or "Larpscape"
+        h.Parent = note
+        local m = Instance.new("TextLabel")
+        m.Position = UDim2.fromOffset(12, 28)
+        m.Size = UDim2.new(1, -24, 0, 28)
+        m.BackgroundTransparency = 1
+        m.Font = Enum.Font.Gotham
+        m.TextSize = 11
+        m.TextColor3 = C.muted
+        m.TextWrapped = true
+        m.TextXAlignment = Enum.TextXAlignment.Left
+        m.Text = tostring(message)
+        m.Parent = note
+        task.delay(4, function()
+            if note then note:Destroy() end
+        end)
+    end
+
+    app.syncUI = function()
+        for key, control in pairs(controls) do
+            if control.kind == "color3" then
+                control:set(cfg[key])
+            else
+                control:set(cfg[key])
+            end
+        end
+        if controls.magnetRange and controls.magnetRange.setEnabled then
+            controls.magnetRange:setEnabled(cfg.evilGiftMagnet ~= true, cfg.evilGiftMagnet and "300" or nil)
+        end
+        root.Position = UDim2.fromOffset(cfg.ui.x, cfg.ui.y)
+        root.Size = UDim2.fromOffset(760, 540)
+        window.position:set(Vector2.new(cfg.ui.x, cfg.ui.y))
+        window.size:set(Vector2.new(760, 540))
+        window.isOpened:set(cfg.ui.opened ~= false)
+        gui.Enabled = window.isOpened.value
+        local currentTab = pages[cfg.ui.tab] or pages.Main
+        for _, t in ipairs(tabs) do
+            local active = t == currentTab
+            t.page.Visible = active
+            t.button.BackgroundColor3 = active and C.accent2 or C.panel2
+            t.button.TextColor3 = active and C.text or C.muted
+        end
+    end
+
+    app.onSetting = function(key)
+        if key == "softAntiBonk" and cfg.softAntiBonk then cfg.hardAntiBonk = false
+        elseif key == "hardAntiBonk" and cfg.hardAntiBonk then cfg.softAntiBonk = false end
+        if key == "softAntiBonk" or key == "hardAntiBonk" then
+            if controls.softAntiBonk then controls.softAntiBonk:set(cfg.softAntiBonk) end
+            if controls.hardAntiBonk then controls.hardAntiBonk:set(cfg.hardAntiBonk) end
+        end
+        if key == "alternateColor" or key == "alternateColorEnabled" or key == "all" then visuals:applyAlternateColor() end
+        if key == "skyboxColor" or key == "skyboxColorEnabled" or key == "all" then visuals:applySkyboxColor() end
+        if key == "springerCrushnt" or key == "all" then enemies:syncSpringerCrushnt() end
+        if key == "springerWarningSound" and not cfg.springerWarningSound then enemies:stopSpringerSound() end
+        if key == "voidbreakerSolver" and not cfg.voidbreakerSolver then enemies:clearSwordMarks() end
+        app:queue("settings/effects", function()
+            if not cfg.spiritTrajectory then trajectory:clear() end
+            if not cfg.eBoostEnabled or cfg.gliderSpeedEnabled then glider:clear() end
+            enemies:tick()
+            magnet:tick()
+        end)
+        if key == "autoRefreshUpgrades" and cfg.autoRefreshUpgrades then
+            app:queue("upgrades/enable", function() upgrades:sync(true) end, 0, true)
+        end
+    end
+
+    -- Window dragging
+    local dragging = false
+    local dragStart, startPos
+    top.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = root.Position
+        end
+    end)
+    app.scope:connect(UserInputService.InputChanged, function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            local x = startPos.X.Offset + delta.X
+            local y = startPos.Y.Offset + delta.Y
+            root.Position = UDim2.fromOffset(x, y)
+            window.position:set(Vector2.new(x, y))
+        end
+    end)
+    app.scope:connect(UserInputService.InputEnded, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if dragging then
+                local pos = root.AbsolutePosition
+                cfg.ui.x, cfg.ui.y = pos.X, pos.Y
+                config:touch()
+            end
+            dragging = false
+        end
+    end)
+
+    app.scope:connect(UserInputService.InputBegan, function(input, processed)
+        if UserInputService:GetFocusedTextBox() then return end
+        if input.KeyCode == Enum.KeyCode.K then
+            if not processed then
+                window.isOpened:set(not window.isOpened.value)
+                gui.Enabled = window.isOpened.value
+                cfg.ui.opened = window.isOpened.value
+                config:touch()
+            end
+        elseif input.KeyCode == Enum.KeyCode.Q and cfg.diverModeHotkeyEnabled
+            and app:inRound() and app.movement.SpecialID == "Dive" then
+            config:set("diverCollectionMode", not cfg.diverCollectionMode)
+            if controls.diverCollectionMode then controls.diverCollectionMode:set(cfg.diverCollectionMode) end
+            if app.notify then app.notify(cfg.diverCollectionMode and "Collection Mode" or "Dive Mode", "Diver") end
+        end
+    end)
+
+    local dynamicNext = 0
+    app.scope:connect(game:GetService("RunService").Heartbeat, function()
+        local now = os.clock()
+        if now >= dynamicNext then
+            dynamicNext = now + 0.25
+            for _, item in ipairs(dynamicLabels) do
+                if item.label.Parent then
+                    local ok, value = pcall(item.fn)
+                    if ok then item.label.Text = tostring(value) end
+                end
+            end
+            footer.Text = tostring(config.status or "Auto-save ready") .. "   •   K: toggle UI"
+        end
+    end)
+
+    app.syncUI()
+end
+
+
+-- A new run owns exactly one app. A previous V2 run is closed before registering
+-- any listeners or creating UI. Legacy native hooks require a fresh client.
+local environment = getgenv()
+local previous = environment.__LarpscapeRuntimeV2
+if type(previous) == "table" and type(previous.stop) == "function" then previous:stop() end
+local leftoverSwordMarks = workspace:FindFirstChild("LarpscapeVoidbreakerSolver")
+if leftoverSwordMarks then leftoverSwordMarks:Destroy() end
+environment.__LarpscapeRuntimeV2 = app
+app.scope:own(function()
+    if environment.__LarpscapeRuntimeV2 == app then environment.__LarpscapeRuntimeV2 = nil end
+end)
+local reloadState = getfenv().STATE
+if type(reloadState) == "table" and type(reloadState.onCleanup) == "function" then
+    reloadState.onCleanup(function() app:stop() end)
+end
+local started, startupError = pcall(function()
+    config:load()
+    cfg.ui.tab = "Main"
+    buildUI()
+    app:start()
+    config:touch()
+    app.notify("Larpscape loaded! Toggle: K", "Larpscape")
+end)
+if not started then app:stop(); error("Larpscape startup: " .. tostring(startupError), 0) end
