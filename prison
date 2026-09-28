@@ -1,7 +1,6 @@
 -- x8 Key System
--- The main script is not started until the correct key is entered.
-
 local X8_KEY = "skibidisex67"
+local DISCORD_LINK = "https://discord.gg/nEQR7nCP2"
 
 local function startX8()
 local Players = game:GetService("Players")
@@ -4347,21 +4346,13 @@ end))
 end
 
 local function createX8KeySystem()
-    local Players = game:GetService("Players")
     local UserInputService = game:GetService("UserInputService")
     local CoreGui = game:GetService("CoreGui")
-
     local parent = CoreGui
-    pcall(function()
-        if type(gethui) == "function" then
-            parent = gethui()
-        end
-    end)
+    pcall(function() if type(gethui) == "function" then parent = gethui() end end)
 
     local old = parent:FindFirstChild("x8KeySystem")
-    if old then
-        old:Destroy()
-    end
+    if old then old:Destroy() end
 
     local gui = Instance.new("ScreenGui")
     gui.Name = "x8KeySystem"
@@ -4370,140 +4361,120 @@ local function createX8KeySystem()
     gui.Parent = parent
 
     local frame = Instance.new("Frame")
-    frame.Name = "Main"
-    frame.Size = UDim2.fromOffset(360, 205)
+    frame.Size = UDim2.fromOffset(360, 255)
     frame.Position = UDim2.fromScale(0.5, 0.5)
     frame.AnchorPoint = Vector2.new(0.5, 0.5)
-    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+    frame.BackgroundColor3 = Color3.fromRGB(18,18,22)
     frame.BorderSizePixel = 0
     frame.Parent = gui
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 12)
-    corner.Parent = frame
-
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(55, 55, 65)
-    stroke.Thickness = 1
-    stroke.Parent = frame
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,12)
 
     local title = Instance.new("TextLabel")
     title.BackgroundTransparency = 1
-    title.Size = UDim2.new(1, -30, 0, 35)
-    title.Position = UDim2.fromOffset(15, 15)
+    title.Size = UDim2.new(1,-30,0,35)
+    title.Position = UDim2.fromOffset(15,15)
     title.Font = Enum.Font.GothamBold
     title.Text = "x8"
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.TextColor3 = Color3.new(1,1,1)
     title.TextSize = 24
     title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = frame
 
     local subtitle = Instance.new("TextLabel")
     subtitle.BackgroundTransparency = 1
-    subtitle.Size = UDim2.new(1, -30, 0, 24)
-    subtitle.Position = UDim2.fromOffset(15, 48)
+    subtitle.Size = UDim2.new(1,-30,0,24)
+    subtitle.Position = UDim2.fromOffset(15,48)
     subtitle.Font = Enum.Font.Gotham
     subtitle.Text = "Enter your key to continue"
-    subtitle.TextColor3 = Color3.fromRGB(160, 160, 170)
+    subtitle.TextColor3 = Color3.fromRGB(160,160,170)
     subtitle.TextSize = 14
     subtitle.TextXAlignment = Enum.TextXAlignment.Left
     subtitle.Parent = frame
 
     local box = Instance.new("TextBox")
-    box.Name = "KeyBox"
-    box.Size = UDim2.new(1, -30, 0, 42)
-    box.Position = UDim2.fromOffset(15, 82)
-    box.BackgroundColor3 = Color3.fromRGB(27, 27, 33)
+    box.Size = UDim2.new(1,-30,0,42)
+    box.Position = UDim2.fromOffset(15,82)
+    box.BackgroundColor3 = Color3.fromRGB(27,27,33)
     box.BorderSizePixel = 0
     box.ClearTextOnFocus = false
     box.Font = Enum.Font.Gotham
     box.PlaceholderText = "Enter key..."
-    box.Text = ""
-    box.TextColor3 = Color3.fromRGB(240, 240, 245)
-    box.PlaceholderColor3 = Color3.fromRGB(100, 100, 110)
+    box.TextColor3 = Color3.fromRGB(240,240,245)
+    box.PlaceholderColor3 = Color3.fromRGB(100,100,110)
     box.TextSize = 14
     box.Parent = frame
-
-    local boxCorner = Instance.new("UICorner")
-    boxCorner.CornerRadius = UDim.new(0, 8)
-    boxCorner.Parent = box
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0,8)
 
     local button = Instance.new("TextButton")
-    button.Size = UDim2.new(1, -30, 0, 38)
-    button.Position = UDim2.fromOffset(15, 132)
-    button.BackgroundColor3 = Color3.fromRGB(35, 35, 43)
+    button.Size = UDim2.new(1,-30,0,38)
+    button.Position = UDim2.fromOffset(15,132)
+    button.BackgroundColor3 = Color3.fromRGB(35,35,43)
     button.BorderSizePixel = 0
     button.Font = Enum.Font.GothamBold
     button.Text = "UNLOCK"
-    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.TextColor3 = Color3.new(1,1,1)
     button.TextSize = 14
     button.Parent = frame
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0,8)
 
-    local buttonCorner = Instance.new("UICorner")
-    buttonCorner.CornerRadius = UDim.new(0, 8)
-    buttonCorner.Parent = button
+    local discordButton = Instance.new("TextButton")
+    discordButton.Size = UDim2.new(1,-30,0,34)
+    discordButton.Position = UDim2.fromOffset(15,177)
+    discordButton.BackgroundColor3 = Color3.fromRGB(45,45,55)
+    discordButton.BorderSizePixel = 0
+    discordButton.Font = Enum.Font.GothamBold
+    discordButton.Text = "FREE KEY IN DISCORD"
+    discordButton.TextColor3 = Color3.new(1,1,1)
+    discordButton.TextSize = 13
+    discordButton.Parent = frame
+    Instance.new("UICorner", discordButton).CornerRadius = UDim.new(0,8)
 
     local status = Instance.new("TextLabel")
     status.BackgroundTransparency = 1
-    status.Size = UDim2.new(1, -30, 0, 20)
-    status.Position = UDim2.fromOffset(15, 174)
+    status.Size = UDim2.new(1,-30,0,20)
+    status.Position = UDim2.fromOffset(15,218)
     status.Font = Enum.Font.Gotham
     status.Text = ""
-    status.TextColor3 = Color3.fromRGB(255, 90, 90)
+    status.TextColor3 = Color3.fromRGB(255,90,90)
     status.TextSize = 12
-    status.TextXAlignment = Enum.TextXAlignment.Center
     status.Parent = frame
 
-    -- Make the key window draggable.
-    local dragging = false
-    local dragStart
-    local startPos
+    discordButton.MouseButton1Click:Connect(function()
+        pcall(function()
+            if type(setclipboard) == "function" then setclipboard(DISCORD_LINK)
+            elseif type(toclipboard) == "function" then toclipboard(DISCORD_LINK) end
+        end)
+        status.TextColor3 = Color3.fromRGB(170,170,180)
+        status.Text = "Discord invite copied!"
+    end)
 
+    local dragging, dragStart, startPos = false, nil, nil
     title.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
+            dragging, dragStart, startPos = true, input.Position, frame.Position
         end
     end)
-
     title.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
     end)
-
     UserInputService.InputChanged:Connect(function(input)
         if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            local delta = input.Position - dragStart
-            frame.Position = UDim2.new(
-                startPos.X.Scale,
-                startPos.X.Offset + delta.X,
-                startPos.Y.Scale,
-                startPos.Y.Offset + delta.Y
-            )
+            local d = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,startPos.Y.Scale,startPos.Y.Offset+d.Y)
         end
     end)
 
     local unlocked = false
-
     local function tryKey()
-        if unlocked then
-            return
-        end
-
+        if unlocked then return end
         if box.Text == X8_KEY then
             unlocked = true
-            status.TextColor3 = Color3.fromRGB(100, 255, 150)
+            status.TextColor3 = Color3.fromRGB(100,255,150)
             status.Text = "Unlocked"
-
             task.wait(0.15)
             gui:Destroy()
-
-            -- Only here does the actual x8 script start.
             startX8()
         else
-            status.TextColor3 = Color3.fromRGB(255, 90, 90)
             status.Text = "Invalid key"
             box.Text = ""
             box:CaptureFocus()
@@ -4511,13 +4482,7 @@ local function createX8KeySystem()
     end
 
     button.MouseButton1Click:Connect(tryKey)
-
-    box.FocusLost:Connect(function(enterPressed)
-        if enterPressed then
-            tryKey()
-        end
-    end)
-
+    box.FocusLost:Connect(function(enterPressed) if enterPressed then tryKey() end end)
     box:CaptureFocus()
 end
 
