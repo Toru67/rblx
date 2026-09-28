@@ -4465,15 +4465,92 @@ local function createX8KeySystem()
     end)
 
     local unlocked = false
+
+    -- Remember a successfully entered key for 24 hours.
+    -- This uses the executor's file functions when they are available.
+    local KEY_CACHE_FILE = "x8_key_cache.txt"
+    local KEY_CACHE_DURATION = 24 * 60 * 60
+
+    local function getSavedKeyTime()
+        if type(isfile) ~= "function" or type(readfile) ~= "function" then
+            return nil
+        end
+
+        local ok, value = pcall(function()
+            if not isfile(KEY_CACHE_FILE) then
+                return nil
+            end
+
+            local saved = tonumber(readfile(KEY_CACHE_FILE))
+            if not saved then
+                return nil
+            end
+
+            return saved
+        end)
+
+        if ok then
+            return value
+        end
+
+        return nil
+    end
+
+    local function saveKeyTime()
+        if type(writefile) ~= "function" then
+            return
+        end
+
+        pcall(function()
+            writefile(KEY_CACHE_FILE, tostring(os.time()))
+        end)
+    end
+
+    local function hasValidSavedKey()
+        local savedTime = getSavedKeyTime()
+        if not savedTime then
+            return false
+        end
+
+        if os.time() - savedTime < KEY_CACHE_DURATION then
+            return true
+        end
+
+        pcall(function()
+            if type(delfile) == "function" and type(isfile) == "function" and isfile(KEY_CACHE_FILE) then
+                delfile(KEY_CACHE_FILE)
+            end
+        end)
+
+        return false
+    end
+
+    local function unlockScript()
+        if unlocked then return end
+
+        unlocked = true
+        status.TextColor3 = Color3.fromRGB(100,255,150)
+        status.Text = "Unlocked"
+        task.wait(0.15)
+
+        gui:Destroy()
+        startX8()
+    end
+
+    -- If the key was already entered within the last 24 hours,
+    -- skip the key window and load x8 immediately.
+    if hasValidSavedKey() then
+        gui:Destroy()
+        startX8()
+        return
+    end
+
     local function tryKey()
         if unlocked then return end
+
         if box.Text == X8_KEY then
-            unlocked = true
-            status.TextColor3 = Color3.fromRGB(100,255,150)
-            status.Text = "Unlocked"
-            task.wait(0.15)
-            gui:Destroy()
-            startX8()
+            saveKeyTime()
+            unlockScript()
         else
             status.Text = "Invalid key"
             box.Text = ""
