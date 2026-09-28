@@ -4345,6 +4345,76 @@ end))
 
 end
 
+-- x8 24-hour key cache
+local X8_KEY_CACHE_FILE = "x8_key_cache_v2.txt"
+local X8_KEY_CACHE_DURATION = 24 * 60 * 60
+
+local function getSavedKeyTime()
+    if type(readfile) ~= "function" then
+        return nil
+    end
+
+    local ok, data = pcall(function()
+        return readfile(X8_KEY_CACHE_FILE)
+    end)
+
+    if not ok or type(data) ~= "string" then
+        return nil
+    end
+
+    local timestamp = tonumber(data:match("^%s*(%d+)%s*$"))
+    if not timestamp then
+        return nil
+    end
+
+    return timestamp
+end
+
+local function hasValidSavedKey()
+    local savedTime = getSavedKeyTime()
+    if not savedTime then
+        return false
+    end
+
+    local age = os.time() - savedTime
+
+    if age < 0 then
+        return false
+    end
+
+    if age < X8_KEY_CACHE_DURATION then
+        return true
+    end
+
+    if type(delfile) == "function" then
+        pcall(function()
+            delfile(X8_KEY_CACHE_FILE)
+        end)
+    end
+
+    return false
+end
+
+local function saveKeyFor24Hours()
+    if type(writefile) ~= "function" then
+        return false
+    end
+
+    local timestamp = tostring(os.time())
+
+    local ok = pcall(function()
+        writefile(X8_KEY_CACHE_FILE, timestamp)
+    end)
+
+    if not ok or type(readfile) ~= "function" then
+        return false
+    end
+
+    -- Verify that the executor really saved the timestamp.
+    local saved = getSavedKeyTime()
+    return saved ~= nil and saved == tonumber(timestamp)
+end
+
 local function createX8KeySystem()
     local UserInputService = game:GetService("UserInputService")
     local CoreGui = game:GetService("CoreGui")
@@ -4466,79 +4536,23 @@ local function createX8KeySystem()
 
     local unlocked = false
 
-    -- Remember a successfully entered key for 24 hours.
-    -- This uses the executor's file functions when they are available.
-    local KEY_CACHE_FILE = "x8_key_cache.txt"
-    local KEY_CACHE_DURATION = 24 * 60 * 60
-
-    local function getSavedKeyTime()
-        if type(isfile) ~= "function" or type(readfile) ~= "function" then
-            return nil
-        end
-
-        local ok, value = pcall(function()
-            if not isfile(KEY_CACHE_FILE) then
-                return nil
-            end
-
-            local saved = tonumber(readfile(KEY_CACHE_FILE))
-            if not saved then
-                return nil
-            end
-
-            return saved
-        end)
-
-        if ok then
-            return value
-        end
-
-        return nil
-    end
-
-    local function saveKeyTime()
-        if type(writefile) ~= "function" then
-            return
-        end
-
-        pcall(function()
-            writefile(KEY_CACHE_FILE, tostring(os.time()))
-        end)
-    end
-
-    local function hasValidSavedKey()
-        local savedTime = getSavedKeyTime()
-        if not savedTime then
-            return false
-        end
-
-        if os.time() - savedTime < KEY_CACHE_DURATION then
-            return true
-        end
-
-        pcall(function()
-            if type(delfile) == "function" and type(isfile) == "function" and isfile(KEY_CACHE_FILE) then
-                delfile(KEY_CACHE_FILE)
-            end
-        end)
-
-        return false
-    end
-
     local function unlockScript()
         if unlocked then return end
-
         unlocked = true
+
         status.TextColor3 = Color3.fromRGB(100,255,150)
-        status.Text = "Unlocked"
+        status.Text = "Unlocked for 24 hours"
+
         task.wait(0.15)
 
-        gui:Destroy()
+        if gui and gui.Parent then
+            gui:Destroy()
+        end
+
         startX8()
     end
 
-    -- If the key was already entered within the last 24 hours,
-    -- skip the key window and load x8 immediately.
+    -- If the key was successfully saved before, skip the key screen.
     if hasValidSavedKey() then
         gui:Destroy()
         startX8()
@@ -4549,9 +4563,17 @@ local function createX8KeySystem()
         if unlocked then return end
 
         if box.Text == X8_KEY then
-            saveKeyTime()
-            unlockScript()
+            if saveKeyFor24Hours() then
+                unlockScript()
+            else
+                -- The key is valid, but this executor cannot persist it.
+                status.TextColor3 = Color3.fromRGB(255,190,90)
+                status.Text = "Key valid - 24h saving unavailable"
+                task.wait(0.6)
+                unlockScript()
+            end
         else
+            status.TextColor3 = Color3.fromRGB(255,90,90)
             status.Text = "Invalid key"
             box.Text = ""
             box:CaptureFocus()
