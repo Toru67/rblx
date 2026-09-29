@@ -138,7 +138,7 @@ local speedLabel = Instance.new("TextLabel")
 speedLabel.Size = UDim2.new(1, -30, 0, 20)
 speedLabel.Position = UDim2.fromOffset(15, 140)
 speedLabel.BackgroundTransparency = 1
-speedLabel.Text = "Join Interval: 0.10s"
+speedLabel.Text = "Interval: 0.10s"
 speedLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
 speedLabel.TextSize = 12
 speedLabel.Font = Enum.Font.Gotham
@@ -192,11 +192,10 @@ local function updateSlider(x)
 
 	knob.Position = UDim2.new(percent, -7, 0.5, -7)
 
-	-- 0.05s -> 1.00s
 	spamInterval = 0.05 + (percent * 0.95)
 
 	speedLabel.Text = string.format(
-		"Join Interval: %.2fs",
+		"Interval: %.2fs",
 		spamInterval
 	)
 end
@@ -225,11 +224,11 @@ local function resetSlider()
 	spamInterval = 0.1
 
 	knob.Position = UDim2.new(0.5, -7, 0.5, -7)
-	speedLabel.Text = "Join Interval: 0.10s"
+	speedLabel.Text = "Interval: 0.10s"
 end
 
 --------------------------------------------------
--- Auto Join
+-- Auto join + troop spawn
 --------------------------------------------------
 
 local function autoJoin()
@@ -238,21 +237,60 @@ local function autoJoin()
 	end
 
 	running = true
-	startButton.Text = "STOP"
+	startButton.Text = "JOINING..."
 
 	task.spawn(function()
 
 		--------------------------------------------------
-		-- Team Join Loop
-		-- Continues until START/STOP is pressed
+		-- Step 1: Join selected team
 		--------------------------------------------------
 
 		while running do
+
+			if player.Team and player.Team.Name == selectedTeam then
+				break
+			end
+
 			teamRequest:FireServer(selectedTeam)
 
 			task.wait(spamInterval)
 		end
 
+		if not running then
+			return
+		end
+
+		--------------------------------------------------
+		-- Step 2: Spawn selected troop multiple times
+		--------------------------------------------------
+
+		local spawnAttempts = 6
+
+		for attempt = 1, spawnAttempts do
+
+			if not running then
+				return
+			end
+
+			startButton.Text = "SPAWNING... " .. attempt .. "/" .. spawnAttempts
+
+			troopRequest:FireServer(selectedTroop)
+
+			task.wait(0.5)
+		end
+
+		--------------------------------------------------
+		-- Step 3: Finished
+		--------------------------------------------------
+
+		running = false
+
+		startButton.Text = "DONE!"
+		resetSlider()
+
+		task.wait(0.7)
+
+		startButton.Text = "START"
 	end)
 end
 
