@@ -1,8 +1,4 @@
 
--- Combined Rere GUI + movement controls + ESP + aim assist
--- Use only in your own Roblox experience or an authorized test environment.
--- This is a client LocalScript; client-side movement may not replicate to the server.
-
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
