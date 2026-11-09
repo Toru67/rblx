@@ -1,0 +1,4324 @@
+local function startRere()
+if _G.RereHubCleanup then pcall(_G.RereHubCleanup)end local Players=game:GetService("Players")local CoreGui=game:GetService("CoreGui")local UserInputService=game:GetService("UserInputService")local VirtualInputManager=game:GetService("VirtualInputManager")local RunService=game:GetService("RunService")local player=Players.LocalPlayer local running=true local chessOn=false local fishOn=false local teleportQOn=false local flyOn=false local walkSpeed=16 local flySpeed=35 local flyConnection=nil local flyVelocity=nil local flyGyro=nil local speedDragging=false local flySpeedDragging=false local gui=Instance.new("ScreenGui")gui.Name="RereHub"gui.ResetOnSpawn=false gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling gui.Parent=CoreGui local main=Instance.new("Frame")main.Name="Main"main.Size=UDim2 .fromOffset(270,370)main.Position=UDim2 .new(0,25,0.5,-185)main.BackgroundColor3=Color3 .fromRGB(17,17,20)main.BorderSizePixel=0 main.Parent=gui local mainCorner=Instance.new("UICorner")mainCorner.CornerRadius=UDim.new(0,9)mainCorner.Parent=main local stroke=Instance.new("UIStroke")stroke.Color=Color3 .fromRGB(65,65,72)stroke.Thickness=1 stroke.Parent=main local title=Instance.new("TextLabel")title.Size=UDim2 .new(1,-20,0,36)title.Position=UDim2 .fromOffset(10,0)title.BackgroundTransparency=1 title.Text="Toru hub"title.TextColor3=Color3 .fromRGB(245,245,245)title.Font=Enum.Font.GothamBold title.TextSize=15 title.TextXAlignment=Enum.TextXAlignment.Left title.Parent=main local subtitle=Instance.new("TextLabel")subtitle.Position=UDim2 .fromOffset(10,32)subtitle.Size=UDim2 .new(1,-20,0,20)subtitle.BackgroundTransparency=1 subtitle.Text="Imagine cheating"subtitle.TextColor3=Color3 .fromRGB(135,135,145)subtitle.Font=Enum.Font.Gotham subtitle.TextSize=10 subtitle.TextXAlignment=Enum.TextXAlignment.Left subtitle.Parent=main local function makeButton(text,y)local button=Instance.new("TextButton")button.Size=UDim2 .new(1,-20,0,42)button.Position=UDim2 .fromOffset(10,y)button.BackgroundColor3=Color3 .fromRGB(32,32,38)button.BorderSizePixel=0 button.Text=text button.TextColor3=Color3 .fromRGB(235,235,240)button.Font=Enum.Font.GothamSemibold button.TextSize=12 button.AutoButtonColor=true button.Parent=main local corner=Instance.new("UICorner")corner.CornerRadius=UDim.new(0,6)corner.Parent=button return button end local chessButton=makeButton("CHESS HELPER     [ OFF ]",61)local fishButton=makeButton("AUTO FISH             [ OFF ]",109)local teleportQButton=makeButton("777 FARM          [ OFF ]",157)local flyButton=makeButton("FLY                       [ OFF ]",205)local speedLabel=Instance.new("TextLabel")speedLabel.Size=UDim2 .new(1,-20,0,22)speedLabel.Position=UDim2 .fromOffset(10,254)speedLabel.BackgroundTransparency=1 speedLabel.Text="WALK SPEED: 16"speedLabel.TextColor3=Color3 .fromRGB(235,235,240)speedLabel.Font=Enum.Font.GothamSemibold speedLabel.TextSize=11 speedLabel.TextXAlignment=Enum.TextXAlignment.Left speedLabel.Parent=main local speedTrack=Instance.new("Frame")speedTrack.Size=UDim2 .new(1,-20,0,12)speedTrack.Position=UDim2 .fromOffset(10,282)speedTrack.BackgroundColor3=Color3 .fromRGB(48,48,56)speedTrack.BorderSizePixel=0 speedTrack.Parent=main Instance.new("UICorner",speedTrack).CornerRadius=UDim.new(1,0)local speedFill=Instance.new("Frame")speedFill.Size=UDim2 .new(0,0,1,0)speedFill.BackgroundColor3=Color3 .fromRGB(70,170,115)speedFill.BorderSizePixel=0 speedFill.Parent=speedTrack Instance.new("UICorner",speedFill).CornerRadius=UDim.new(1,0)local speedKnob=Instance.new("Frame")speedKnob.Size=UDim2 .fromOffset(16,16)speedKnob.AnchorPoint=Vector2 .new(0.5,0.5)speedKnob.Position=UDim2 .new(0,0,0.5,0)speedKnob.BackgroundColor3=Color3 .fromRGB(245,245,245)speedKnob.BorderSizePixel=0 speedKnob.Parent=speedTrack Instance.new("UICorner",speedKnob).CornerRadius=UDim.new(1,0)local speedHitbox=Instance.new("TextButton")speedHitbox.Size=UDim2 .new(1,0,0,30)speedHitbox.Position=UDim2 .fromOffset(0,-9)speedHitbox.BackgroundTransparency=1 speedHitbox.Text=""speedHitbox.Parent=speedTrack local flySpeedLabel=Instance.new("TextLabel")flySpeedLabel.Size=UDim2 .new(1,-20,0,22)flySpeedLabel.Position=UDim2 .fromOffset(10,310)flySpeedLabel.BackgroundTransparency=1 flySpeedLabel.Text="FLY SPEED: 35"flySpeedLabel.TextColor3=Color3 .fromRGB(235,235,240)flySpeedLabel.Font=Enum.Font.GothamSemibold flySpeedLabel.TextSize=11 flySpeedLabel.TextXAlignment=Enum.TextXAlignment.Left flySpeedLabel.Parent=main local flySpeedTrack=Instance.new("Frame")flySpeedTrack.Size=UDim2 .new(1,-20,0,12)flySpeedTrack.Position=UDim2 .fromOffset(10,338)flySpeedTrack.BackgroundColor3=Color3 .fromRGB(48,48,56)flySpeedTrack.BorderSizePixel=0 flySpeedTrack.Parent=main Instance.new("UICorner",flySpeedTrack).CornerRadius=UDim.new(1,0)local flySpeedFill=Instance.new("Frame")flySpeedFill.Size=UDim2 .new(0,0,1,0)flySpeedFill.BackgroundColor3=Color3 .fromRGB(70,170,115)flySpeedFill.BorderSizePixel=0 flySpeedFill.Parent=flySpeedTrack Instance.new("UICorner",flySpeedFill).CornerRadius=UDim.new(1,0)local flySpeedKnob=Instance.new("Frame")flySpeedKnob.Size=UDim2 .fromOffset(16,16)flySpeedKnob.AnchorPoint=Vector2 .new(0.5,0.5)flySpeedKnob.Position=UDim2 .new(0,0,0.5,0)flySpeedKnob.BackgroundColor3=Color3 .fromRGB(245,245,245)flySpeedKnob.BorderSizePixel=0 flySpeedKnob.Parent=flySpeedTrack Instance.new("UICorner",flySpeedKnob).CornerRadius=UDim.new(1,0)local flySpeedHitbox=Instance.new("TextButton")flySpeedHitbox.Size=UDim2 .new(1,0,0,30)flySpeedHitbox.Position=UDim2 .fromOffset(0,-9)flySpeedHitbox.BackgroundTransparency=1 flySpeedHitbox.Text=""flySpeedHitbox.Parent=flySpeedTrack local function setButton(button,label,enabled)button.Text=label..(enabled and"     [ ON ]"or"     [ OFF ]")button.BackgroundColor3=enabled and Color3 .fromRGB(35,76,57)or Color3 .fromRGB(32,32,38)end local CHESS_SOURCE=[=[-- Chess Assistant - Aggressive Tactical Engine*
+
+
+
+-- Local suggestion overlay only*
+
+
+
+-- Board names: Chess_1 ... Chess_18*
+
+
+
+
+
+
+
+if _G.ChessAssistantCleanup then
+
+
+
+    pcall(_G.ChessAssistantCleanup)
+
+
+
+end
+
+
+
+
+
+
+
+local Players = game:GetService("Players")
+
+
+
+local RunService = game:GetService("RunService")
+
+
+
+local Workspace = game:GetService("Workspace")
+
+
+
+
+
+
+
+local Player = Players.LocalPlayer
+
+
+
+local Camera = Workspace.CurrentCamera
+
+
+
+
+
+
+
+local Running = true
+
+
+
+local SelectedColor = nil
+
+
+
+local CurrentBoard = nil
+
+
+
+local LastPosition = nil
+
+
+
+local SuggestedMove = nil
+
+
+
+local LastSuggestionTime = 0
+
+
+
+
+
+
+
+local SEARCH_DEPTH = 5
+
+
+
+local MAX_THINK_TIME = 1.35
+
+
+
+local THINK_INTERVAL = 0.5
+
+
+
+
+
+
+
+local ROOT = Workspace:FindFirstChild("Environment")
+
+
+
+    and Workspace.Environment:FindFirstChild("Decoration")
+
+
+
+    and Workspace.Environment.Decoration:FindFirstChild("TableGames")
+
+
+
+
+
+
+
+if not ROOT then
+
+
+
+    warn("[Chess Assistant] TableGames folder not found")
+
+
+
+    return
+
+
+
+end
+
+
+
+
+
+
+
+local PieceTypes = {
+
+
+
+    Pawn = "p",
+
+
+
+    Tower = "r",
+
+
+
+    Horse = "n",
+
+
+
+    Bishop = "b",
+
+
+
+    Queen = "q",
+
+
+
+    King = "k"
+
+
+
+}
+
+
+
+
+
+
+
+local PieceValues = {
+
+
+
+    p = 100,
+
+
+
+    n = 320,
+
+
+
+    b = 335,
+
+
+
+    r = 500,
+
+
+
+    q = 950,
+
+
+
+    k = 20000
+
+
+
+}
+
+
+
+
+
+
+
+local function cloneBoard(board)
+
+
+
+    local result = {}
+
+
+
+
+
+
+
+    for rank = 1, 8 do
+
+
+
+        result[rank] = {}
+
+
+
+
+
+
+
+        for file = 1, 8 do
+
+
+
+            local p = board[rank][file]
+
+
+
+
+
+
+
+            if p then
+
+
+
+                result[rank][file] = {
+
+
+
+                    t = p.t,
+
+
+
+                    c = p.c
+
+
+
+                }
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    return result
+
+
+
+end
+
+
+
+
+
+
+
+local function inside(r, f)
+
+
+
+    return r >= 1 and r <= 8 and f >= 1 and f <= 8
+
+
+
+end
+
+
+
+
+
+
+
+local function opposite(color)
+
+
+
+    return not color
+
+
+
+end
+
+
+
+
+
+
+
+local function findKing(board, color)
+
+
+
+    for r = 1, 8 do
+
+
+
+        for f = 1, 8 do
+
+
+
+            local p = board[r][f]
+
+
+
+
+
+
+
+            if p and p.t == "k" and p.c == color then
+
+
+
+                return r, f
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+end
+
+
+
+
+
+
+
+local function squareAttacked(board, r, f, byWhite)
+
+
+
+    local pawnDirection = byWhite and 1 or -1
+
+
+
+    local pawnRank = r - pawnDirection
+
+
+
+
+
+
+
+    for _, df in ipairs({-1, 1}) do
+
+
+
+        local pf = f + df
+
+
+
+
+
+
+
+        if inside(pawnRank, pf) then
+
+
+
+            local p = board[pawnRank][pf]
+
+
+
+
+
+
+
+            if p and p.t == "p" and p.c == byWhite then
+
+
+
+                return true
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    local knightOffsets = {
+
+
+
+        {2, 1}, {2, -1}, {-2, 1}, {-2, -1},
+
+
+
+        {1, 2}, {1, -2}, {-1, 2}, {-1, -2}
+
+
+
+    }
+
+
+
+
+
+
+
+    for _, offset in ipairs(knightOffsets) do
+
+
+
+        local rr = r + offset[1]
+
+
+
+        local ff = f + offset[2]
+
+
+
+
+
+
+
+        if inside(rr, ff) then
+
+
+
+            local p = board[rr][ff]
+
+
+
+
+
+
+
+            if p and p.t == "n" and p.c == byWhite then
+
+
+
+                return true
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    for dr = -1, 1 do
+
+
+
+        for df = -1, 1 do
+
+
+
+            if dr ~= 0 or df ~= 0 then
+
+
+
+                local rr = r + dr
+
+
+
+                local ff = f + df
+
+
+
+
+
+
+
+                if inside(rr, ff) then
+
+
+
+                    local p = board[rr][ff]
+
+
+
+
+
+
+
+                    if p and p.t == "k" and p.c == byWhite then
+
+
+
+                        return true
+
+
+
+                    end
+
+
+
+                end
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    local directions = {
+
+
+
+        {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+
+
+
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
+
+
+
+    }
+
+
+
+
+
+
+
+    for i, direction in ipairs(directions) do
+
+
+
+        local dr, df = direction[1], direction[2]
+
+
+
+        local rr, ff = r + dr, f + df
+
+
+
+        local distance = 1
+
+
+
+
+
+
+
+        while inside(rr, ff) do
+
+
+
+            local p = board[rr][ff]
+
+
+
+
+
+
+
+            if p then
+
+
+
+                if p.c == byWhite then
+
+
+
+                    local diagonal = i > 4
+
+
+
+
+
+
+
+                    if p.t == "q"
+
+
+
+                        or (p.t == "r" and not diagonal)
+
+
+
+                        or (p.t == "b" and diagonal)
+
+
+
+                        or (p.t == "k" and distance == 1) then
+
+
+
+                        return true
+
+
+
+                    end
+
+
+
+                end
+
+
+
+
+
+
+
+                break
+
+
+
+            end
+
+
+
+
+
+
+
+            rr += dr
+
+
+
+            ff += df
+
+
+
+            distance += 1
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    return false
+
+
+
+end
+
+
+
+
+
+
+
+local function inCheck(board, color)
+
+
+
+    local r, f = findKing(board, color)
+
+
+
+
+
+
+
+    if not r then
+
+
+
+        return true
+
+
+
+    end
+
+
+
+
+
+
+
+    return squareAttacked(board, r, f, opposite(color))
+
+
+
+end
+
+
+
+
+
+
+
+local function applyMove(board, move)
+
+
+
+    local nextBoard = cloneBoard(board)
+
+
+
+
+
+
+
+    local piece = nextBoard[move.fr][move.ff]
+
+
+
+    nextBoard[move.fr][move.ff] = nil
+
+
+
+
+
+
+
+    if move.ep then
+
+
+
+        nextBoard[move.fr][move.toF] = nil
+
+
+
+    end
+
+
+
+
+
+
+
+    if move.castle then
+
+
+
+        local rookFrom = move.toF == 7 and 8 or 1
+
+
+
+        local rookTo = move.toF == 7 and 6 or 4
+
+
+
+        local rook = nextBoard[move.fr][rookFrom]
+
+
+
+
+
+
+
+        nextBoard[move.fr][rookFrom] = nil
+
+
+
+        nextBoard[move.fr][rookTo] = rook
+
+
+
+    end
+
+
+
+
+
+
+
+    if move.promotion then
+
+
+
+        piece = {
+
+
+
+            t = move.promotion,
+
+
+
+            c = piece.c
+
+
+
+        }
+
+
+
+    end
+
+
+
+
+
+
+
+    nextBoard[move.toR][move.toF] = piece
+
+
+
+
+
+
+
+    return nextBoard
+
+
+
+end
+
+
+
+
+
+
+
+local function addMove(moves, board, fr, ff, tr, tf, extra)
+
+
+
+    if not inside(tr, tf) then
+
+
+
+        return
+
+
+
+    end
+
+
+
+
+
+
+
+    local target = board[tr][tf]
+
+
+
+    local piece = board[fr][ff]
+
+
+
+
+
+
+
+    if target and target.c == piece.c then
+
+
+
+        return
+
+
+
+    end
+
+
+
+
+
+
+
+    local move = {
+
+
+
+        fr = fr,
+
+
+
+        ff = ff,
+
+
+
+        toR = tr,
+
+
+
+        toF = tf,
+
+
+
+        capture = target ~= nil,
+
+
+
+        captured = target and target.t or nil
+
+
+
+    }
+
+
+
+
+
+
+
+    if extra then
+
+
+
+        for k, v in pairs(extra) do
+
+
+
+            move[k] = v
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    if piece.t == "p" and (tr == 8 or tr == 1) then
+
+
+
+        move.promotion = "q"
+
+
+
+    end
+
+
+
+
+
+
+
+    table.insert(moves, move)
+
+
+
+end
+
+
+
+
+
+
+
+local function pseudoMoves(board, color)
+
+
+
+    local moves = {}
+
+
+
+
+
+
+
+    for r = 1, 8 do
+
+
+
+        for f = 1, 8 do
+
+
+
+            local p = board[r][f]
+
+
+
+
+
+
+
+            if p and p.c == color then
+
+
+
+                if p.t == "p" then
+
+
+
+                    local dir = color and 1 or -1
+
+
+
+                    local startRank = color and 2 or 7
+
+
+
+                    local nr = r + dir
+
+
+
+
+
+
+
+                    if inside(nr, f) and not board[nr][f] then
+
+
+
+                        addMove(moves, board, r, f, nr, f)
+
+
+
+
+
+
+
+                        local doubleRank = r + dir * 2
+
+
+
+
+
+
+
+                        if r == startRank and not board[doubleRank][f] then
+
+
+
+                            addMove(moves, board, r, f, doubleRank, f)
+
+
+
+                        end
+
+
+
+                    end
+
+
+
+
+
+
+
+                    for _, df in ipairs({-1, 1}) do
+
+
+
+                        local nf = f + df
+
+
+
+
+
+
+
+                        if inside(nr, nf) then
+
+
+
+                            local target = board[nr][nf]
+
+
+
+
+
+
+
+                            if target and target.c ~= color then
+
+
+
+                                addMove(moves, board, r, f, nr, nf)
+
+
+
+                            end
+
+
+
+                        end
+
+
+
+                    end
+
+
+
+
+
+
+
+                elseif p.t == "n" then
+
+
+
+                    local offsets = {
+
+
+
+                        {2, 1}, {2, -1}, {-2, 1}, {-2, -1},
+
+
+
+                        {1, 2}, {1, -2}, {-1, 2}, {-1, -2}
+
+
+
+                    }
+
+
+
+
+
+
+
+                    for _, o in ipairs(offsets) do
+
+
+
+                        addMove(moves, board, r, f, r + o[1], f + o[2])
+
+
+
+                    end
+
+
+
+
+
+
+
+                elseif p.t == "k" then
+
+
+
+                    for dr = -1, 1 do
+
+
+
+                        for df = -1, 1 do
+
+
+
+                            if dr ~= 0 or df ~= 0 then
+
+
+
+                                addMove(moves, board, r, f, r + dr, f + df)
+
+
+
+                            end
+
+
+
+                        end
+
+
+
+                    end
+
+
+
+
+
+
+
+                else
+
+
+
+                    local directions = {}
+
+
+
+
+
+
+
+                    if p.t == "b" or p.t == "q" then
+
+
+
+                        table.insert(directions, {1, 1})
+
+
+
+                        table.insert(directions, {1, -1})
+
+
+
+                        table.insert(directions, {-1, 1})
+
+
+
+                        table.insert(directions, {-1, -1})
+
+
+
+                    end
+
+
+
+
+
+
+
+                    if p.t == "r" or p.t == "q" then
+
+
+
+                        table.insert(directions, {1, 0})
+
+
+
+                        table.insert(directions, {-1, 0})
+
+
+
+                        table.insert(directions, {0, 1})
+
+
+
+                        table.insert(directions, {0, -1})
+
+
+
+                    end
+
+
+
+
+
+
+
+                    for _, d in ipairs(directions) do
+
+
+
+                        local rr = r + d[1]
+
+
+
+                        local ff = f + d[2]
+
+
+
+
+
+
+
+                        while inside(rr, ff) do
+
+
+
+                            local target = board[rr][ff]
+
+
+
+
+
+
+
+                            if target then
+
+
+
+                                if target.c ~= color then
+
+
+
+                                    addMove(moves, board, r, f, rr, ff)
+
+
+
+                                end
+
+
+
+
+
+
+
+                                break
+
+
+
+                            end
+
+
+
+
+
+
+
+                            addMove(moves, board, r, f, rr, ff)
+
+
+
+                            rr += d[1]
+
+
+
+                            ff += d[2]
+
+
+
+                        end
+
+
+
+                    end
+
+
+
+                end
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    return moves
+
+
+
+end
+
+
+
+
+
+
+
+local function legalMoves(board, color)
+
+
+
+    local result = {}
+
+
+
+    local moves = pseudoMoves(board, color)
+
+
+
+
+
+
+
+    for _, move in ipairs(moves) do
+
+
+
+        local nextBoard = applyMove(board, move)
+
+
+
+
+
+
+
+        if not inCheck(nextBoard, color) then
+
+
+
+            move.givesCheck = inCheck(nextBoard, opposite(color))
+
+
+
+            table.insert(result, move)
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    return result
+
+
+
+end
+
+
+
+
+
+
+
+local function evaluate(board)
+
+
+
+    local score = 0
+
+
+
+    local whiteKingR, whiteKingF = findKing(board, true)
+
+
+
+    local blackKingR, blackKingF = findKing(board, false)
+
+
+
+
+
+
+
+    for r = 1, 8 do
+
+
+
+        for f = 1, 8 do
+
+
+
+            local p = board[r][f]
+
+
+
+
+
+
+
+            if p then
+
+
+
+                local value = PieceValues[p.t]
+
+
+
+                local center = 7 - (math.abs(4.5 - r) + math.abs(4.5 - f))
+
+
+
+                local advancement = p.c and r or (9 - r)
+
+
+
+
+
+
+
+                local positional = 0
+
+
+
+
+
+
+
+                if p.t == "p" then
+
+
+
+                    positional = advancement * 9 + center * 2
+
+
+
+                elseif p.t == "n" then
+
+
+
+                    positional = center * 13
+
+
+
+                elseif p.t == "b" then
+
+
+
+                    positional = center * 8
+
+
+
+                elseif p.t == "r" then
+
+
+
+                    positional = advancement * 2
+
+
+
+
+
+
+
+                    if advancement == 7 then
+
+
+
+                        positional += 18
+
+
+
+                    end
+
+
+
+                elseif p.t == "q" then
+
+
+
+                    positional = center * 3
+
+
+
+                elseif p.t == "k" then
+
+
+
+                    positional = -center * 5
+
+
+
+                end
+
+
+
+
+
+
+
+                local pieceScore = value + positional
+
+
+
+
+
+
+
+                if p.c then
+
+
+
+                    score += pieceScore
+
+
+
+                else
+
+
+
+                    score -= pieceScore
+
+
+
+                end
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    -- King pressure: reward pieces attacking the enemy king area.*
+
+
+
+    if blackKingR then
+
+
+
+        for r = math.max(1, blackKingR - 2), math.min(8, blackKingR + 2) do
+
+
+
+            for f = math.max(1, blackKingF - 2), math.min(8, blackKingF + 2) do
+
+
+
+                if squareAttacked(board, r, f, true) then
+
+
+
+                    score += 7
+
+
+
+                end
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    if whiteKingR then
+
+
+
+        for r = math.max(1, whiteKingR - 2), math.min(8, whiteKingR + 2) do
+
+
+
+            for f = math.max(1, whiteKingF - 2), math.min(8, whiteKingF + 2) do
+
+
+
+                if squareAttacked(board, r, f, false) then
+
+
+
+                    score -= 7
+
+
+
+                end
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    -- Small mobility bonus for active pieces.*
+
+
+
+    local whiteMobility = #pseudoMoves(board, true)
+
+
+
+    local blackMobility = #pseudoMoves(board, false)
+
+
+
+    score += (whiteMobility - blackMobility) * 2
+
+
+
+
+
+
+
+    return score
+
+
+
+end
+
+
+
+
+
+
+
+local function moveScore(board, move)
+
+
+
+    local score = 0
+
+
+
+    local attacker = board[move.fr][move.ff]
+
+
+
+
+
+
+
+    if move.capture then
+
+
+
+        score += 10000
+
+
+
+            + (PieceValues[move.captured] or 0) * 10
+
+
+
+            - (PieceValues[attacker.t] or 0)
+
+
+
+    end
+
+
+
+
+
+
+
+    if move.promotion then
+
+
+
+        score += 8000
+
+
+
+    end
+
+
+
+
+
+
+
+    if move.givesCheck then
+
+
+
+        score += 700
+
+
+
+    end
+
+
+
+
+
+
+
+    local center = 7 - (
+
+
+
+        math.abs(4.5 - move.toR)
+
+
+
+        + math.abs(4.5 - move.toF)
+
+
+
+    )
+
+
+
+
+
+
+
+    score += center * 4
+
+
+
+
+
+
+
+    if attacker.t == "n" or attacker.t == "b" then
+
+
+
+        score += 30
+
+
+
+    end
+
+
+
+
+
+
+
+    return score
+
+
+
+end
+
+
+
+
+
+
+
+local function quiescence(board, alpha, beta, color, ply)
+
+
+
+    local standPat = evaluate(board) * (color and 1 or -1)
+
+
+
+
+
+
+
+    if standPat >= beta then
+
+
+
+        return beta
+
+
+
+    end
+
+
+
+
+
+
+
+    if standPat > alpha then
+
+
+
+        alpha = standPat
+
+
+
+    end
+
+
+
+
+
+
+
+    if ply >= 5 then
+
+
+
+        return alpha
+
+
+
+    end
+
+
+
+
+
+
+
+    local moves = legalMoves(board, color)
+
+
+
+    local captures = {}
+
+
+
+
+
+
+
+    for _, move in ipairs(moves) do
+
+
+
+        if move.capture or move.promotion then
+
+
+
+            table.insert(captures, move)
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    table.sort(captures, function(a, b)
+
+
+
+        return moveScore(board, a) > moveScore(board, b)
+
+
+
+    end)
+
+
+
+
+
+
+
+    for _, move in ipairs(captures) do
+
+
+
+        local nextBoard = applyMove(board, move)
+
+
+
+        local score = -quiescence(
+
+
+
+            nextBoard,
+
+
+
+            -beta,
+
+
+
+            -alpha,
+
+
+
+            opposite(color),
+
+
+
+            ply + 1
+
+
+
+        )
+
+
+
+
+
+
+
+        if score >= beta then
+
+
+
+            return beta
+
+
+
+        end
+
+
+
+
+
+
+
+        if score > alpha then
+
+
+
+            alpha = score
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    return alpha
+
+
+
+end
+
+
+
+
+
+
+
+local SearchStart = 0
+
+local SearchStopped = false
+
+local SearchNodes = 0
+
+local SEARCH_YIELD_EVERY = 80
+
+local SEARCH_TIME_LIMIT = 1.35
+
+local QUIESCENCE_LIMIT = 2
+
+local SearchGeneration = 0
+
+
+
+-- Called frequently from search. task.wait() gives Roblox a chance to render*
+
+-- and process input; the deadline also stops unusually large positions.*
+
+local function searchCheckpoint()
+
+    SearchNodes += 1
+
+
+
+    if SearchNodes % SEARCH_YIELD_EVERY == 0 then
+
+        task.wait()
+
+    end
+
+
+
+    if os.clock() - SearchStart >= SEARCH_TIME_LIMIT then
+
+        SearchStopped = true
+
+        return false
+
+    end
+
+
+
+    return true
+
+end
+
+
+
+local function quiescence(board, alpha, beta, color, ply)
+
+    if not searchCheckpoint() then
+
+        return evaluate(board) * (color and 1 or -1)
+
+    end
+
+
+
+    local standPat = evaluate(board) * (color and 1 or -1)
+
+
+
+    if standPat >= beta then
+
+        return beta
+
+    end
+
+
+
+    if standPat > alpha then
+
+        alpha = standPat
+
+    end
+
+
+
+    if ply >= QUIESCENCE_LIMIT then
+
+        return alpha
+
+    end
+
+
+
+    local moves = legalMoves(board, color)
+
+    local captures = {}
+
+
+
+    for _, move in ipairs(moves) do
+
+        if move.capture or move.promotion then
+
+            table.insert(captures, move)
+
+        end
+
+    end
+
+
+
+    table.sort(captures, function(a, b)
+
+        return moveScore(board, a) > moveScore(board, b)
+
+    end)
+
+
+
+    for _, move in ipairs(captures) do
+
+        if not searchCheckpoint() then
+
+            break
+
+        end
+
+
+
+        local nextBoard = applyMove(board, move)
+
+        local score = -quiescence(
+
+            nextBoard,
+
+            -beta,
+
+            -alpha,
+
+            opposite(color),
+
+            ply + 1
+
+        )
+
+
+
+        if score >= beta then
+
+            return beta
+
+        end
+
+
+
+        if score > alpha then
+
+            alpha = score
+
+        end
+
+
+
+        if SearchStopped then
+
+            break
+
+        end
+
+    end
+
+
+
+    return alpha
+
+end
+
+
+
+local function negamax(board, depth, alpha, beta, color, ply)
+
+    if not searchCheckpoint() then
+
+        return evaluate(board) * (color and 1 or -1)
+
+    end
+
+
+
+    if depth <= 0 then
+
+        return quiescence(board, alpha, beta, color, 0)
+
+    end
+
+
+
+    local moves = legalMoves(board, color)
+
+
+
+    if #moves == 0 then
+
+        if inCheck(board, color) then
+
+            return -100000 + ply
+
+        end
+
+        return 0
+
+    end
+
+
+
+    table.sort(moves, function(a, b)
+
+        return moveScore(board, a) > moveScore(board, b)
+
+    end)
+
+
+
+    local best = -math.huge
+
+
+
+    for _, move in ipairs(moves) do
+
+        if not searchCheckpoint() then
+
+            break
+
+        end
+
+
+
+        local nextBoard = applyMove(board, move)
+
+        local score = -negamax(
+
+            nextBoard,
+
+            depth - 1,
+
+            -beta,
+
+            -alpha,
+
+            opposite(color),
+
+            ply + 1
+
+        )
+
+
+
+        if score > best then
+
+            best = score
+
+        end
+
+
+
+        if score > alpha then
+
+            alpha = score
+
+        end
+
+
+
+        if alpha >= beta or SearchStopped then
+
+            break
+
+        end
+
+    end
+
+
+
+    if best == -math.huge then
+
+        return evaluate(board) * (color and 1 or -1)
+
+    end
+
+
+
+    return best
+
+end
+
+
+
+local function bestMove(board, color)
+
+    local myGeneration = SearchGeneration
+
+
+
+    SearchStart = os.clock()
+
+    SearchStopped = false
+
+    SearchNodes = 0
+
+
+
+    local moves = legalMoves(board, color)
+
+    if #moves == 0 then
+
+        return nil
+
+    end
+
+
+
+    table.sort(moves, function(a, b)
+
+        return moveScore(board, a) > moveScore(board, b)
+
+    end)
+
+
+
+    -- Always have a legal fallback in case the time limit is reached.*
+
+    local best = moves[1]
+
+
+
+    for depth = 1, SEARCH_DEPTH do
+
+        if os.clock() - SearchStart >= SEARCH_TIME_LIMIT then
+
+            break
+
+        end
+
+
+
+        SearchStopped = false
+
+        local iterationBest = best
+
+        local iterationScore = -math.huge
+
+        local alpha = -math.huge
+
+        local beta = math.huge
+
+
+
+        for _, move in ipairs(moves) do
+
+            if not searchCheckpoint() then
+
+                break
+
+            end
+
+
+
+            local nextBoard = applyMove(board, move)
+
+            local score = -negamax(
+
+                nextBoard,
+
+                depth - 1,
+
+                -beta,
+
+                -alpha,
+
+                opposite(color),
+
+                1
+
+            )
+
+
+
+            if score > iterationScore then
+
+                iterationScore = score
+
+                iterationBest = move
+
+            end
+
+
+
+            if score > alpha then
+
+                alpha = score
+
+            end
+
+
+
+            if SearchStopped or myGeneration ~= SearchGeneration then
+
+                break
+
+            end
+
+        end
+
+
+
+        -- Only accept a fully completed depth.*
+
+        if not SearchStopped and myGeneration == SearchGeneration then
+
+            best = iterationBest
+
+        else
+
+            break
+
+        end
+
+    end
+
+
+
+    return best
+
+end
+
+
+
+-- GUI*
+
+
+
+local ScreenGui = Instance.new("ScreenGui")
+
+
+
+ScreenGui.Name = "ChessAssistant"
+
+
+
+ScreenGui.ResetOnSpawn = false
+
+
+
+ScreenGui.Parent = game:GetService("CoreGui")
+
+
+
+
+
+
+
+local Main = Instance.new("Frame")
+
+
+
+Main.Size = UDim2.fromOffset(230, 145)
+
+
+
+Main.Position = UDim2.new(0, 25, 0.5, -72)
+
+
+
+Main.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+
+
+
+Main.BorderSizePixel = 0
+
+
+
+Main.Parent = ScreenGui
+
+
+
+
+
+
+
+local Corner = Instance.new("UICorner")
+
+
+
+Corner.CornerRadius = UDim.new(0, 9)
+
+
+
+Corner.Parent = Main
+
+
+
+
+
+
+
+local Title = Instance.new("TextLabel")
+
+
+
+Title.Size = UDim2.new(1, 0, 0, 35)
+
+
+
+Title.BackgroundTransparency = 1
+
+
+
+Title.Text = "CHESS ASSISTANT"
+
+
+
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+
+
+
+Title.Font = Enum.Font.GothamBold
+
+
+
+Title.TextSize = 15
+
+
+
+Title.Parent = Main
+
+
+
+
+
+
+
+local Status = Instance.new("TextLabel")
+
+
+
+Status.Position = UDim2.fromOffset(10, 38)
+
+
+
+Status.Size = UDim2.new(1, -20, 0, 25)
+
+
+
+Status.BackgroundTransparency = 1
+
+
+
+Status.Text = "Select your color"
+
+
+
+Status.TextColor3 = Color3.fromRGB(190, 190, 190)
+
+
+
+Status.Font = Enum.Font.Gotham
+
+
+
+Status.TextSize = 12
+
+
+
+Status.Parent = Main
+
+
+
+
+
+
+
+local function createButton(text, position, callback)
+
+
+
+    local button = Instance.new("TextButton")
+
+
+
+    button.Size = UDim2.fromOffset(95, 32)
+
+
+
+    button.Position = position
+
+
+
+    button.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+
+
+
+    button.BorderSizePixel = 0
+
+
+
+    button.Text = text
+
+
+
+    button.TextColor3 = Color3.new(1, 1, 1)
+
+
+
+    button.Font = Enum.Font.GothamBold
+
+
+
+    button.TextSize = 12
+
+
+
+    button.Parent = Main
+
+
+
+
+
+
+
+    local corner = Instance.new("UICorner")
+
+
+
+    corner.CornerRadius = UDim.new(0, 6)
+
+
+
+    corner.Parent = button
+
+
+
+
+
+
+
+    button.MouseButton1Click:Connect(callback)
+
+
+
+
+
+
+
+    return button
+
+
+
+end
+
+
+
+
+
+
+
+createButton("WHITE", UDim2.fromOffset(12, 76), function()
+
+
+
+    SelectedColor = true
+
+
+
+    Status.Text = "Playing as WHITE"
+
+
+
+    LastPosition = nil
+
+
+
+    LastObservedBoard = nil
+
+
+
+    SuggestedMove = nil
+
+
+
+end)
+
+
+
+
+
+
+
+createButton("BLACK", UDim2.fromOffset(123, 76), function()
+
+
+
+    SelectedColor = false
+
+
+
+    Status.Text = "Playing as BLACK"
+
+
+
+    LastPosition = nil
+
+
+
+    LastObservedBoard = nil
+
+
+
+    SuggestedMove = nil
+
+
+
+end)
+
+
+
+
+
+
+
+local ScanButton = createButton("RESCAN", UDim2.fromOffset(68, 112), function()
+
+
+
+    LastPosition = nil
+
+
+
+    LastObservedBoard = nil
+
+
+
+    SuggestedMove = nil
+
+
+
+    Status.Text = "Scanning board..."
+
+
+
+end)
+
+
+
+
+
+
+
+local function getNearestBoard()
+
+
+
+    local character = Player.Character
+
+
+
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+
+
+
+
+
+
+
+    if not root then
+
+
+
+        return nil
+
+
+
+    end
+
+
+
+
+
+
+
+    local nearest
+
+
+
+    local nearestDistance = math.huge
+
+
+
+
+
+
+
+    for i = 1, 18 do
+
+
+
+        local board = ROOT:FindFirstChild("Chess_" .. i)
+
+
+
+
+
+
+
+        if board then
+
+
+
+            local chessBoard = board:FindFirstChild("ChessBoard")
+
+
+
+            local grid = chessBoard
+
+
+
+                and chessBoard:FindFirstChild("Board")
+
+
+
+                and chessBoard.Board:FindFirstChild("_ChessGridAnchor")
+
+
+
+
+
+
+
+            if grid then
+
+
+
+                local distance = (root.Position - grid.Position).Magnitude
+
+
+
+
+
+
+
+                if distance < nearestDistance then
+
+
+
+                    nearestDistance = distance
+
+
+
+                    nearest = chessBoard
+
+
+
+                end
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    return nearest
+
+
+
+end
+
+
+
+
+
+
+
+local function scanBoard(chessBoard)
+
+
+
+    local grid = chessBoard
+
+
+
+        and chessBoard:FindFirstChild("Board")
+
+
+
+        and chessBoard.Board:FindFirstChild("_ChessGridAnchor")
+
+
+
+
+
+
+
+    if not grid then
+
+
+
+        return nil
+
+
+
+    end
+
+
+
+
+
+
+
+    local board = {}
+
+
+
+
+
+
+
+    for r = 1, 8 do
+
+
+
+        board[r] = {}
+
+
+
+
+
+
+
+        for f = 1, 8 do
+
+
+
+            board[r][f] = nil
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    local cell = grid.Size.X / 8
+
+
+
+
+
+
+
+    local function scanFolder(folder, color)
+
+
+
+        if not folder then
+
+
+
+            return
+
+
+
+        end
+
+
+
+
+
+
+
+        for _, piece in ipairs(folder:GetChildren()) do
+
+
+
+            if piece:IsA("BasePart") then
+
+
+
+                local pieceType
+
+
+
+
+
+
+
+                for name, symbol in pairs(PieceTypes) do
+
+
+
+                    if string.find(piece.Name, name) then
+
+
+
+                        pieceType = symbol
+
+
+
+                        break
+
+
+
+                    end
+
+
+
+                end
+
+
+
+
+
+
+
+                if pieceType then
+
+
+
+                    local localPosition =
+
+
+
+                        grid.CFrame:PointToObjectSpace(piece.Position)
+
+
+
+
+
+
+
+                    local file = math.floor(
+
+
+
+                        (localPosition.X + grid.Size.X / 2) / cell
+
+
+
+                    ) + 1
+
+
+
+
+
+
+
+                    local rank = 8 - math.floor(
+
+
+
+                        (localPosition.Z + grid.Size.Z / 2) / cell
+
+
+
+                    )
+
+
+
+
+
+
+
+                    if inside(rank, file) then
+
+
+
+                        board[rank][file] = {
+
+
+
+                            t = pieceType,
+
+
+
+                            c = color,
+
+
+
+                            part = piece
+
+
+
+                        }
+
+
+
+                    end
+
+
+
+                end
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    scanFolder(chessBoard:FindFirstChild("WhiteFigures"), true)
+
+
+
+    scanFolder(chessBoard:FindFirstChild("BlackFigures"), false)
+
+
+
+
+
+
+
+    return board, grid
+
+
+
+end
+
+
+
+
+
+
+
+local function fingerprint(board)
+
+
+
+    local parts = {}
+
+
+
+
+
+
+
+    for r = 1, 8 do
+
+
+
+        for f = 1, 8 do
+
+
+
+            local p = board[r][f]
+
+
+
+
+
+
+
+            if p then
+
+
+
+                parts[#parts + 1] =
+
+
+
+                    tostring(r) .. tostring(f) .. p.t .. (p.c and "w" or "b")
+
+
+
+            else
+
+
+
+                parts[#parts + 1] = "."
+
+
+
+            end
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    return table.concat(parts)
+
+
+
+end
+
+
+
+
+
+
+
+local ActiveHighlights = {}
+
+
+
+local function clearHighlights()
+
+
+
+    for _, object in ipairs(ActiveHighlights) do
+
+
+
+        if object and object.Parent then
+
+
+
+            object:Destroy()
+
+
+
+        end
+
+
+
+    end
+
+
+
+    table.clear(ActiveHighlights)
+
+
+
+end
+
+
+
+
+
+
+
+local function highlightMove(board, grid, move)
+
+
+
+    clearHighlights()
+
+
+
+
+
+
+
+    local piece = board[move.fr][move.ff]
+
+
+
+
+
+
+
+    if not piece or not piece.part then
+
+
+
+        return
+
+
+
+    end
+
+
+
+
+
+
+
+    local highlight = Instance.new("Highlight")
+
+
+
+    highlight.Name = "ChessAssistantHighlight"
+
+
+
+    highlight.Adornee = piece.part
+
+
+
+    highlight.FillColor = Color3.fromRGB(0, 255, 100)
+
+
+
+    highlight.OutlineColor = Color3.fromRGB(0, 255, 100)
+
+
+
+    highlight.FillTransparency = 0.35
+
+
+
+    highlight.OutlineTransparency = 0
+
+
+
+    highlight.Parent = piece.part
+
+    ActiveHighlights[#ActiveHighlights + 1] = highlight
+
+
+
+
+
+
+
+    local cell = grid.Size.X / 8
+
+
+
+
+
+
+
+    local x = (move.toF - 4.5) * cell
+
+
+
+    local z = (4.5 - move.toR) * cell
+
+
+
+
+
+
+
+    local marker = Instance.new("Part")
+
+
+
+    marker.Name = "ChessAssistantHighlight"
+
+
+
+    marker.Anchored = true
+
+
+
+    marker.CanCollide = false
+
+
+
+    marker.CanQuery = false
+
+
+
+    marker.CanTouch = false
+
+
+
+    marker.Size = Vector3.new(cell * 0.8, 0.06, cell * 0.8)
+
+
+
+    marker.Color = Color3.fromRGB(0, 255, 100)
+
+
+
+    marker.Material = Enum.Material.Neon
+
+
+
+    marker.Transparency = 0.25
+
+
+
+    marker.CFrame = grid.CFrame * CFrame.new(
+
+
+
+        x,
+
+
+
+        grid.Size.Y / 2 + 0.08,
+
+
+
+        z
+
+
+
+    )
+
+
+
+    marker.Parent = Workspace
+
+    ActiveHighlights[#ActiveHighlights + 1] = marker
+
+
+
+end
+
+
+
+
+
+
+
+local function squareName(r, f)
+
+
+
+    return string.char(96 + f) .. tostring(r)
+
+
+
+end
+
+
+
+
+
+
+
+local function inferMovedColor(previousBoard, currentBoard)
+
+    if not previousBoard or not currentBoard then
+
+        return nil
+
+    end
+
+
+
+    local changes = {
+
+        [true] = 0,
+
+        [false] = 0
+
+    }
+
+
+
+    for r = 1, 8 do
+
+        for f = 1, 8 do
+
+            local oldPiece = previousBoard[r][f]
+
+            local newPiece = currentBoard[r][f]
+
+
+
+            local samePiece = oldPiece and newPiece
+
+                and oldPiece.t == newPiece.t
+
+                and oldPiece.c == newPiece.c
+
+
+
+            if not samePiece then
+
+                if oldPiece then
+
+                    changes[oldPiece.c] = changes[oldPiece.c] + 1
+
+                end
+
+
+
+                if newPiece then
+
+                    changes[newPiece.c] = changes[newPiece.c] + 1
+
+                end
+
+            end
+
+        end
+
+    end
+
+
+
+    if changes[true] > changes[false] then
+
+        return true
+
+    elseif changes[false] > changes[true] then
+
+        return false
+
+    end
+
+
+
+    return nil
+
+end
+
+
+
+
+
+local function calculate()
+
+
+
+    if not SelectedColor then
+
+
+
+        if SelectedColor == false then
+
+
+
+            -- BLACK is a valid selection.*
+
+
+
+        else
+
+
+
+            return
+
+
+
+        end
+
+
+
+    end
+
+
+
+
+
+
+
+    CurrentBoard = getNearestBoard()
+
+
+
+
+
+
+
+    if not CurrentBoard then
+
+
+
+        Status.Text = "No nearby chess board"
+
+
+
+        return
+
+
+
+    end
+
+
+
+
+
+
+
+    local board, grid = scanBoard(CurrentBoard)
+
+
+
+
+
+
+
+    if not board then
+
+
+
+        Status.Text = "Could not scan board"
+
+
+
+        return
+
+
+
+    end
+
+
+
+
+
+
+
+    local currentFingerprint = fingerprint(board)
+
+
+
+    if currentFingerprint == LastPosition then
+
+        return
+
+    end
+
+
+
+    local movedColor = inferMovedColor(LastObservedBoard, board)
+
+    LastObservedBoard = cloneBoard(board)
+
+    LastPosition = currentFingerprint
+
+
+
+    -- On first scan, calculate a move so the player can make the opening move.*
+
+    -- After that, only calculate again when the opponent has moved.*
+
+    if movedColor ~= nil and movedColor == SelectedColor then
+
+        SuggestedMove = nil
+
+        clearHighlights()
+
+        Status.Text = "Your move detected - waiting for opponent..."
+
+        return
+
+    end
+
+
+
+    SuggestedMove = nil
+
+    clearHighlights()
+
+
+
+    Status.Text = "Opponent moved - calculating best move..."
+
+
+
+
+
+
+
+    task.spawn(function()
+
+
+
+        local move = bestMove(board, SelectedColor)
+
+
+
+
+
+
+
+        if not Running or not move then
+
+
+
+            Status.Text = "No legal moves"
+
+
+
+            return
+
+
+
+        end
+
+
+
+
+
+
+
+        local latestBoard = scanBoard(CurrentBoard)
+
+
+
+
+
+
+
+        if not latestBoard or fingerprint(latestBoard) ~= currentFingerprint then
+
+
+
+            Status.Text = "Board changed - rescanning"
+
+
+
+            return
+
+
+
+        end
+
+
+
+
+
+
+
+        SuggestedMove = move
+
+
+
+        highlightMove(board, grid, move)
+
+
+
+
+
+
+
+        local from = squareName(move.fr, move.ff)
+
+
+
+        local to = squareName(move.toR, move.toF)
+
+
+
+
+
+
+
+        if move.capture then
+
+
+
+            Status.Text = "CAPTURE: " .. from .. " -> " .. to
+
+
+
+        elseif move.givesCheck then
+
+
+
+            Status.Text = "CHECK: " .. from .. " -> " .. to
+
+
+
+        else
+
+
+
+            Status.Text = "BEST MOVE: " .. from .. " -> " .. to
+
+
+
+        end
+
+
+
+    end)
+
+
+
+end
+
+
+
+
+
+
+
+local drag = false
+
+
+
+local dragStart
+
+
+
+local startPosition
+
+
+
+
+
+
+
+Title.InputBegan:Connect(function(input)
+
+
+
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+
+
+        drag = true
+
+
+
+        dragStart = input.Position
+
+
+
+        startPosition = Main.Position
+
+
+
+    end
+
+
+
+end)
+
+
+
+
+
+
+
+game:GetService("UserInputService").InputChanged:Connect(function(input)
+
+
+
+    if drag and input.UserInputType == Enum.UserInputType.MouseMovement then
+
+
+
+        local delta = input.Position - dragStart
+
+
+
+
+
+
+
+        Main.Position = UDim2.new(
+
+
+
+            startPosition.X.Scale,
+
+
+
+            startPosition.X.Offset + delta.X,
+
+
+
+            startPosition.Y.Scale,
+
+
+
+            startPosition.Y.Offset + delta.Y
+
+
+
+        )
+
+
+
+    end
+
+
+
+end)
+
+
+
+
+
+
+
+game:GetService("UserInputService").InputEnded:Connect(function(input)
+
+
+
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+
+
+        drag = false
+
+
+
+    end
+
+
+
+end)
+
+
+
+
+
+
+
+local connection
+
+
+
+connection = RunService.Heartbeat:Connect(function()
+
+
+
+    if not Running then
+
+
+
+        connection:Disconnect()
+
+
+
+        return
+
+
+
+    end
+
+
+
+
+
+
+
+    if SelectedColor ~= nil then
+
+
+
+        if os.clock() - LastSuggestionTime >= THINK_INTERVAL then
+
+
+
+            LastSuggestionTime = os.clock()
+
+
+
+            calculate()
+
+
+
+        end
+
+
+
+    end
+
+
+
+end)
+
+
+
+
+
+
+
+_G.ChessAssistantCleanup = function()
+
+
+
+    Running = false
+
+
+
+
+
+
+
+    if connection then
+
+
+
+        connection:Disconnect()
+
+
+
+    end
+
+
+
+
+
+
+
+    clearHighlights()
+
+
+
+    ScreenGui:Destroy()
+
+
+
+end
+
+
+
+
+
+
+
+print("[Chess Assistant] Loaded successfully")]=]local FISH_SOURCE=[=[local Players = game:GetService("Players")
+
+local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+
+
+
+local OFFSET = 12
+
+local START_THRESHOLD = 16
+
+local STOP_THRESHOLD = 4
+
+local LOOKAHEAD = 0.12
+
+local UPDATE_INTERVAL = 0.05
+
+
+
+local function findObject(name)
+
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+
+        if obj.Name == name then
+
+            return obj
+
+        end
+
+    end
+
+end
+
+
+
+local regionFrame
+
+local fishLabel
+
+
+
+repeat
+
+    regionFrame = findObject("RegionFrame")
+
+    fishLabel = findObject("FishLabel")
+
+    task.wait(0.5)
+
+until not _G.RereAutoFishRunning or (regionFrame and fishLabel)
+
+
+
+if not _G.RereAutoFishRunning then
+
+    return
+
+end
+
+
+
+if not mouse1press or not mouse1release then
+
+    warn("[Rere] Auto Fish: M1 functions unavailable")
+
+    _G.RereAutoFishRunning = false
+
+    return
+
+end
+
+
+
+local holding = false
+
+local lastRegionY
+
+local lastFishY
+
+local regionVelocity = 0
+
+local fishVelocity = 0
+
+
+
+local function releaseMouse()
+
+    if holding then
+
+        pcall(mouse1release)
+
+        holding = false
+
+    end
+
+end
+
+
+
+print("[Rere] Predictive Auto Fish enabled")
+
+
+
+while _G.RereAutoFishRunning and regionFrame.Parent and fishLabel.Parent do
+
+    local regionY = regionFrame.AbsolutePosition.Y
+
+        + regionFrame.AbsoluteSize.Y / 2
+
+
+
+    local fishY = fishLabel.AbsolutePosition.Y
+
+        + fishLabel.AbsoluteSize.Y / 2
+
+
+
+    if lastRegionY and lastFishY then
+
+        regionVelocity = regionVelocity * 0.5
+
+            + (regionY - lastRegionY) / UPDATE_INTERVAL * 0.5
+
+
+
+        fishVelocity = fishVelocity * 0.5
+
+            + (fishY - lastFishY) / UPDATE_INTERVAL * 0.5
+
+    end
+
+
+
+    lastRegionY = regionY
+
+    lastFishY = fishY
+
+
+
+    local predictedRegion = regionY + regionVelocity * LOOKAHEAD
+
+    local predictedFish = fishY + fishVelocity * LOOKAHEAD + OFFSET
+
+    local difference = predictedRegion - predictedFish
+
+
+
+    if difference > START_THRESHOLD then
+
+        if not holding then
+
+            pcall(mouse1press)
+
+            holding = true
+
+        end
+
+    elseif difference < STOP_THRESHOLD then
+
+        releaseMouse()
+
+    end
+
+
+
+    task.wait(UPDATE_INTERVAL)
+
+end
+
+
+
+releaseMouse()
+
+print("[Rere] Auto Fish stopped")
+
+]=]local function startChess()if chessOn then return end chessOn=true setButton(chessButton,"CHESS HELPER",true)task.spawn(function()local fn,compileError=loadstring(CHESS_SOURCE)if not fn then warn("[Rere] Chess Helper compile error: "..tostring(compileError))chessOn=false if running then setButton(chessButton,"CHESS HELPER",false)end return end local ok,err=pcall(fn)if not ok then warn("[Rere] Chess Helper error: "..tostring(err))end chessOn=false if running then setButton(chessButton,"CHESS HELPER",false)end end)end local function stopChess()if _G.ChessAssistantCleanup then pcall(_G.ChessAssistantCleanup)end chessOn=false setButton(chessButton,"CHESS HELPER",false)end local function startFish()if fishOn then return end fishOn=true _G.RereAutoFishRunning=true setButton(fishButton,"AUTO FISH",true)task.spawn(function()local fn,compileError=loadstring(FISH_SOURCE)if not fn then warn("[Rere] Auto Fish compile error: "..tostring(compileError))fishOn=false _G.RereAutoFishRunning=false if running then setButton(fishButton,"AUTO FISH",false)end return end local ok,err=pcall(fn)if not ok then warn("[Rere] Auto Fish error: "..tostring(err))end fishOn=false _G.RereAutoFishRunning=false if running then setButton(fishButton,"AUTO FISH",false)end end)end local function stopFish()_G.RereAutoFishRunning=false fishOn=false setButton(fishButton,"AUTO FISH",false)end local TARGET_POSITION=Vector3 .new(-543.62,5.50,-228.83)local function teleportCharacter()local character=player.Character or player.CharacterAdded:Wait()local root=character:WaitForChild("HumanoidRootPart",10)if root then character:PivotTo(CFrame.new(TARGET_POSITION))return true end return false end local function pressQ()if type(keypress)=="function"and type(keyrelease)=="function"then keypress(0x51)task.wait(0.08)keyrelease(0x51)return true end local ok=pcall(function()VirtualInputManager:SendKeyEvent(true,Enum.KeyCode.Q,false,game)task.wait(0.08)VirtualInputManager:SendKeyEvent(false,Enum.KeyCode.Q,false,game)end)return ok end local function startTeleportQ()if teleportQOn then return end teleportQOn=true setButton(teleportQButton,"777 FARM",true)task.spawn(function()local teleported=teleportCharacter()if not teleported then warn("[Rere] Could not find HumanoidRootPart for teleport.")teleportQOn=false if running then setButton(teleportQButton,"777 FARM",false)end return end if not pressQ()then warn("[Rere] Q key input is unavailable in this executor.")end while running and teleportQOn do task.wait(10.5)if not running or not teleportQOn then break end if not pressQ()then warn("[Rere] Q key input is unavailable in this executor.")end end end)end local function stopTeleportQ()teleportQOn=false setButton(teleportQButton,"777 FARM",false)end local function applyWalkSpeed()local character=player.Character local humanoid=character and character:FindFirstChildOfClass("Humanoid")if humanoid then humanoid.WalkSpeed=walkSpeed end speedLabel.Text="WALK SPEED: "..tostring(walkSpeed)local alpha=(walkSpeed-16)/(150-16)speedFill.Size=UDim2 .new(alpha,0,1,0)speedKnob.Position=UDim2 .new(alpha,0,0.5,0)end local function setSpeedFromX(x)local alpha=math.clamp((x-speedTrack.AbsolutePosition.X)/speedTrack.AbsoluteSize.X,0,1)walkSpeed=math.floor(16+alpha*(150-16)+0.5)applyWalkSpeed()end speedHitbox.InputBegan:Connect(function(input)if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then speedDragging=true setSpeedFromX(input.Position.X)end end)UserInputService.InputChanged:Connect(function(input)if speedDragging and(input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch)then setSpeedFromX(input.Position.X)end end)UserInputService.InputEnded:Connect(function(input)if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then speedDragging=false end end)local function applyFlySpeed()flySpeedLabel.Text="FLY SPEED: "..tostring(flySpeed)local alpha=(flySpeed-10)/(200-10)flySpeedFill.Size=UDim2 .new(alpha,0,1,0)flySpeedKnob.Position=UDim2 .new(alpha,0,0.5,0)end local function setFlySpeedFromX(x)local alpha=math.clamp((x-flySpeedTrack.AbsolutePosition.X)/flySpeedTrack.AbsoluteSize.X,0,1)flySpeed=math.floor(10+alpha*(200-10)+0.5)applyFlySpeed()end flySpeedHitbox.InputBegan:Connect(function(input)if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then flySpeedDragging=true setFlySpeedFromX(input.Position.X)end end)UserInputService.InputChanged:Connect(function(input)if flySpeedDragging and(input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch)then setFlySpeedFromX(input.Position.X)end end)UserInputService.InputEnded:Connect(function(input)if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then flySpeedDragging=false end end)local function stopFly()flyOn=false if flyConnection then flyConnection:Disconnect();flyConnection=nil end if flyVelocity then flyVelocity:Destroy();flyVelocity=nil end if flyGyro then flyGyro:Destroy();flyGyro=nil end setButton(flyButton,"FLY",false)end local function startFly()local character=player.Character local root=character and character:FindFirstChild("HumanoidRootPart")local humanoid=character and character:FindFirstChildOfClass("Humanoid")if not root or not humanoid then return end flyOn=true setButton(flyButton,"FLY",true)flyVelocity=Instance.new("BodyVelocity")flyVelocity.MaxForce=Vector3 .new(1e6,1e6,1e6)flyVelocity.Velocity=Vector3 .zero flyVelocity.Parent=root flyGyro=Instance.new("BodyGyro")flyGyro.MaxTorque=Vector3 .new(1e6,1e6,1e6)flyGyro.P=1e5 flyGyro.CFrame=workspace.CurrentCamera.CFrame flyGyro.Parent=root flyConnection=RunService.RenderStepped:Connect(function()if not flyOn or not root.Parent then stopFly();return end local camera=workspace.CurrentCamera local move=Vector3 .zero if UserInputService:IsKeyDown(Enum.KeyCode.W)then move+=camera.CFrame.LookVector end if UserInputService:IsKeyDown(Enum.KeyCode.S)then move-=camera.CFrame.LookVector end if UserInputService:IsKeyDown(Enum.KeyCode.D)then move+=camera.CFrame.RightVector end if UserInputService:IsKeyDown(Enum.KeyCode.A)then move-=camera.CFrame.RightVector end if UserInputService:IsKeyDown(Enum.KeyCode.Space)then move+=Vector3 .new(0,1,0)end if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)then move-=Vector3 .new(0,1,0)end if move.Magnitude>0 then move=move.Unit end flyVelocity.Velocity=move*flySpeed flyGyro.CFrame=camera.CFrame end)end flyButton.MouseButton1Click:Connect(function()if flyOn then stopFly()else startFly()end end)player.CharacterAdded:Connect(function()task.wait(0.5)applyWalkSpeed()if flyOn then stopFly()end end)applyWalkSpeed()applyFlySpeed()local walkSpeedStepped,walkSpeedHeartbeat,walkSpeedChanged local function enforceWalkSpeed()if not running then if walkSpeedStepped then walkSpeedStepped:Disconnect();walkSpeedStepped=nil end if walkSpeedHeartbeat then walkSpeedHeartbeat:Disconnect();walkSpeedHeartbeat=nil end if walkSpeedChanged then walkSpeedChanged:Disconnect();walkSpeedChanged=nil end return end local character=player.Character local humanoid=character and character:FindFirstChildOfClass("Humanoid") if humanoid and humanoid.Parent and humanoid.WalkSpeed~=walkSpeed then humanoid.WalkSpeed=walkSpeed end end walkSpeedStepped=RunService.Stepped:Connect(enforceWalkSpeed) walkSpeedHeartbeat=RunService.Heartbeat:Connect(enforceWalkSpeed) local function bindWalkSpeedChanged()if walkSpeedChanged then walkSpeedChanged:Disconnect();walkSpeedChanged=nil end local character=player.Character local humanoid=character and character:FindFirstChildOfClass("Humanoid") if humanoid then walkSpeedChanged=humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(enforceWalkSpeed) end end player.CharacterAdded:Connect(function()task.wait(0.5);bindWalkSpeedChanged();enforceWalkSpeed();if flyOn then stopFly()end end) bindWalkSpeedChanged()chessButton.MouseButton1Click:Connect(function()if chessOn then stopChess()else startChess()end end)fishButton.MouseButton1Click:Connect(function()if fishOn then stopFish()else startFish()end end)teleportQButton.MouseButton1Click:Connect(function()if teleportQOn then stopTeleportQ()else startTeleportQ()end end)local dragging=false local dragInput local dragStart local startPosition title.InputBegan:Connect(function(input)if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=true dragStart=input.Position startPosition=main.Position dragInput=input end end)UserInputService.InputChanged:Connect(function(input)if dragging and(input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch)then local delta=input.Position-dragStart main.Position=UDim2 .new(startPosition.X.Scale,startPosition.X.Offset+delta.X,startPosition.Y.Scale,startPosition.Y.Offset+delta.Y)end end)UserInputService.InputEnded:Connect(function(input)if input==dragInput or input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=false end end)_G.RereHubCleanup=function()running=false stopFish()stopChess()stopTeleportQ()stopFly()if walkSpeedStepped then walkSpeedStepped:Disconnect()end if walkSpeedHeartbeat then walkSpeedHeartbeat:Disconnect()end if walkSpeedChanged then walkSpeedChanged:Disconnect()end if gui then gui:Destroy()end _G.RereHubCleanup=nil end print("[Rere] Hub loaded successfully")
+end
+startRere()
