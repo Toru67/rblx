@@ -1,0 +1,1132 @@
+-- Larpshin window + cultivation buttons + Auto Perfect (Body Trial) + Herb Farm
+local players = game:GetService("Players")
+local workspace = game:GetService("Workspace")
+local runService = game:GetService("RunService")
+local vim = game:GetService("VirtualInputManager")
+local player = players.LocalPlayer
+
+local Rere = assert(loadstring(game:HttpGet("https://api.x8stuff.lol/assets/Rere.lua"), "Larpshin/Rere"))()
+Rere.Init(player:WaitForChild("PlayerGui"))
+
+local camera = workspace.CurrentCamera
+local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+local size = Vector2.new(math.min(430, math.max(240, viewport.X - 24)), math.min(460, math.max(240, viewport.Y - 24)))
+
+local window = {size = Rere.State(size), isOpened = Rere.State(true), isUncollapsed = Rere.State(true),
+    position = Rere.State(Vector2.new(math.max(0, (viewport.X - size.X) / 2), math.max(0, (viewport.Y - size.Y) / 2)))}
+
+local events = game:GetService("ReplicatedStorage"):WaitForChild("CultivationEvents")
+
+local loops = {Qi = false, Body = false, Breakthrough = false, Perfect = false, Herbs = false, Chests = false, Fight = false}
+local perfectOffsetMs = Rere.State(0)
+local perfectStatus = "Off"
+local herbStatus = "Off"
+local chestStatus = "Off"
+local fightStatus = "Off"
+local collectionService = game:GetService("CollectionService")
+
+local function startLoop(name, fn)
+    loops[name] = true
+    task.spawn(function()
+        while loops[name] do
+            pcall(fn)
+            task.wait(1)
+        end
+    end)
+end
+
+local function guiVisible(obj)
+    while obj and not obj:IsA("ScreenGui") do
+        if obj:IsA("GuiObject") and not obj.Visible then return false end
+        obj = obj.Parent
+    end
+    if obj and obj:IsA("ScreenGui") and not obj.Enabled then return false end
+    return true
+end
+
+local function isGold(color)
+    return color.R > 0.7 and color.G > 0.45 and color.B < 0.6 and (color.R - color.B) > 0.25
+end
+
+local function goldOn(obj)
+    if obj.BackgroundTransparency < 1 and isGold(obj.BackgroundColor3) then return true end
+    if (obj:IsA("ImageLabel") or obj:IsA("ImageButton"))
+        and obj.Image ~= "" and obj.ImageTransparency < 1 and isGold(obj.ImageColor3) then
+        return true
+    end
+    for _, ch in ipairs(obj:GetChildren()) do
+        if ch:IsA("UIStroke") and ch.Transparency < 1 and isGold(ch.Color) then return true end
+    end
+    return false
+end
+
+local function pressKey(key)
+    pcall(function() vim:SendKeyEvent(true, key, false, game) end)
+    task.wait(0.05)
+    pcall(function() vim:SendKeyEvent(false, key, false, game) end)
+end
+
+local function holdKey(key, seconds)
+    pcall(function() vim:SendKeyEvent(true, key, false, game) end)
+    task.wait(seconds)
+    pcall(function() vim:SendKeyEvent(false, key, false, game) end)
+end
+
+local function dumpTree(root)
+    local function dump(obj, indent)
+        local extra = ""
+        if obj:IsA("ProximityPrompt") then
+            extra = " Enabled=" .. tostring(obj.Enabled) .. " Key=" .. obj.KeyboardKeyCode.Name
+        elseif obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
+            extra = " Text='" .. obj.Text .. "'"
+        elseif obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
+            extra = " Vis=" .. tostring(obj.Visible) .. " Size=" .. tostring(obj.AbsoluteSize)
+                .. " Img=" .. obj.Image .. " ImgColor=" .. tostring(obj.ImageColor3)
+        elseif obj:IsA("GuiObject") then
+            extra = " Vis=" .. tostring(obj.Visible) .. " Size=" .. tostring(obj.AbsoluteSize)
+                .. " Color=" .. tostring(obj.BackgroundColor3) .. " BgTrans=" .. tostring(obj.BackgroundTransparency)
+        elseif obj:IsA("UIStroke") then
+            extra = " Color=" .. tostring(obj.Color) .. " Trans=" .. tostring(obj.Transparency)
+        elseif obj:IsA("ScreenGui") then
+            extra = " Enabled=" .. tostring(obj.Enabled)
+        end
+        print(string.rep("  ", indent) .. obj.Name .. " [" .. obj.ClassName .. "]" .. extra)
+        for _, c in ipairs(obj:GetChildren()) do dump(c, indent + 1) end
+    end
+    dump(root, 0)
+end
+
+-- Auto Perfect: Body Trial ring shrinks onto the letter circle; press when gold/converged.
+local promptState = {}
+local accumulator = 0
+local dumped = false
+
+runService.Heartbeat:Connect(function(dt)
+    if not loops.Perfect then return end
+    accumulator += dt
+    if accumulator < 1 / 60 then return end
+    accumulator = 0
+
+    local ok, err = pcall(function()
+        local playerGui = player:FindFirstChildOfClass("PlayerGui")
+        local trial = playerGui and playerGui:FindFirstChild("BodyTrialGui", true)
+        if not trial or not guiVisible(trial) then
+            perfectStatus = "Waiting for Body Trial"
+            table.clear(promptState)
+            dumped = false
+            return
+        end
+        if not dumped then
+            dumped = true
+            print("[Larpshin] BodyTrialGui dump:")
+            pcall(dumpTree, trial)
+        end
+
+        local trap = trial:FindFirstChild("TrialKeyTrap", true)
+        local seen = {}
+
+        for _, prompt in ipairs(trial:GetChildren()) do
+            if not prompt.Name:match("^Prompt") then continue end
+
+            if prompt:IsA("ProximityPrompt") then
+                seen[#seen + 1] = prompt.Name .. ":ProximityPrompt"
+                if prompt.Enabled then
+                    local state = promptState[prompt]
+                    if not state then
+                        state = {Pressed = false}
+                        promptState[prompt] = state
+                    end
+                    if not state.Pressed then
+                        state.Pressed = true
+                        local key = prompt.KeyboardKeyCode
+                        perfectStatus = "Hitting " .. key.Name
+                        task.delay(math.max(0, perfectOffsetMs.value / 1000), function()
+                            if not loops.Perfect or not prompt.Enabled then return end
+                            if type(fireproximityprompt) == "function" then
+                                pcall(fireproximityprompt, prompt)
+                            else
+                                pressKey(key)
+                            end
+                        end)
+                    end
+                else
+                    promptState[prompt] = nil
+                end
+
+            elseif prompt:IsA("GuiObject") then
+                seen[#seen + 1] = prompt.Name .. ":" .. prompt.ClassName
+                if not guiVisible(prompt) then
+                    promptState[prompt] = nil
+                else
+                    local letter, letterObj
+                    local squares = {}
+                    local function scan(obj)
+                        if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+                            local t = tostring(obj.Text):match("^%s*(%a)%s*$")
+                            if t and not letterObj then letter, letterObj = t:upper(), obj end
+                        end
+                        if obj:IsA("GuiObject") and obj.Visible then
+                            local s = obj.AbsoluteSize
+                            if s.X > 20 and math.abs(s.X - s.Y) / s.X < 0.25 then
+                                squares[#squares + 1] = obj
+                            end
+                        end
+                    end
+                    scan(prompt)
+                    for _, d in ipairs(prompt:GetDescendants()) do scan(d) end
+
+                    if letter and letterObj and #squares > 0 then
+                        local state = promptState[prompt]
+                        if not state or state.Letter ~= letter then
+                            state = {Letter = letter, Pressed = false, Sizes = {}}
+                            promptState[prompt] = state
+                        end
+
+                        local circle
+                        for _, sq in ipairs(squares) do
+                            if sq ~= letterObj and letterObj:IsDescendantOf(sq) then
+                                if not circle or sq.AbsoluteSize.X < circle.AbsoluteSize.X then circle = sq end
+                            end
+                        end
+                        if not circle then
+                            for _, sq in ipairs(squares) do
+                                if sq ~= letterObj and (not circle or sq.AbsoluteSize.X < circle.AbsoluteSize.X) then circle = sq end
+                            end
+                        end
+
+                        local ring, shrinking
+                        for _, sq in ipairs(squares) do
+                            if sq ~= circle and sq ~= letterObj and not letterObj:IsDescendantOf(sq) then
+                                local last = state.Sizes[sq]
+                                state.Sizes[sq] = sq.AbsoluteSize.X
+                                if last and sq.AbsoluteSize.X < last - 0.5 then shrinking = sq end
+                                if not ring or sq.AbsoluteSize.X > ring.AbsoluteSize.X then ring = sq end
+                            end
+                        end
+                        ring = shrinking or ring
+
+                        local ready = false
+                        if ring then
+                            if goldOn(ring) then ready = true end
+                            if circle and ring.AbsoluteSize.X <= circle.AbsoluteSize.X * 1.15 then ready = true end
+                        end
+
+                        if ready and not state.Pressed then
+                            state.Pressed = true
+                            local key = Enum.KeyCode[letter]
+                            if key then
+                                perfectStatus = "Hitting " .. letter
+                                task.delay(math.max(0, perfectOffsetMs.value / 1000), function()
+                                    if not loops.Perfect or not guiVisible(prompt) then return end
+                                    if trap and trap:IsA("TextBox") and not trap:IsFocused() then
+                                        pcall(function() trap:CaptureFocus() end)
+                                    end
+                                    pressKey(key)
+                                end)
+                            end
+                        end
+                    end
+                end
+            else
+                seen[#seen + 1] = prompt.Name .. ":" .. prompt.ClassName
+            end
+        end
+
+        if #seen == 0 then
+            perfectStatus = "Trial open - no Prompt children found"
+        elseif not perfectStatus:match("^Hitting") then
+            perfectStatus = "Watching " .. table.concat(seen, ", ")
+        end
+    end)
+    if not ok then perfectStatus = "Error: " .. tostring(err) end
+end)
+
+-- Herb Farm: dropdown from Workspace.HerbSpots, walk to spots, pick up with E.
+local herbNames = {}
+local herbIndex = Rere.State(nil)
+
+local function findHerbFolder()
+    return workspace:FindFirstChild("HerbSpots") or workspace:FindFirstChild("HerbSpots", true)
+end
+
+local function refreshHerbs()
+    local folder = findHerbFolder()
+    local set, list = {}, {}
+    if folder then
+        for _, c in ipairs(folder:GetChildren()) do
+            if not set[c.Name] then
+                set[c.Name] = true
+                list[#list + 1] = c.Name
+            end
+        end
+    end
+    table.sort(list)
+    herbNames = list
+    if not herbIndex.value or not set[herbIndex.value] then herbIndex.value = list[1] end
+end
+
+local function herbPosition(obj)
+    if obj:IsA("BasePart") then return obj.Position end
+    if obj:IsA("Model") then
+        if obj.PrimaryPart then return obj.PrimaryPart.Position end
+        local ok, cf = pcall(function() return obj:GetBoundingBox() end)
+        if ok then return cf.Position end
+    end
+    local part = obj:FindFirstChildWhichIsA("BasePart", true)
+    return part and part.Position
+end
+
+local function walkTo(pos)
+    local deadline = os.clock() + 25
+    local lastDist, stuckAt = math.huge, os.clock()
+    while os.clock() < deadline and (loops.Herbs or loops.Chests) do
+        local char = player.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not hrp or hum.Health <= 0 then return false end
+        local dist = (hrp.Position - pos).Magnitude
+        if dist <= 3.5 then return true end
+        if dist < lastDist - 0.25 then
+            lastDist = dist
+            stuckAt = os.clock()
+        elseif os.clock() - stuckAt > 2.5 then
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+            stuckAt = os.clock()
+        end
+        pcall(function() hum:MoveTo(pos) end)
+        task.wait(0.4)
+    end
+    return false
+end
+
+local function interactWith(obj)
+    local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and type(fireproximityprompt) == "function" then
+        pcall(fireproximityprompt, prompt)
+    elseif prompt then
+        holdKey(Enum.KeyCode.E, math.max(0.1, prompt.HoldDuration) + 0.15)
+    else
+        holdKey(Enum.KeyCode.E, 0.12)
+    end
+    task.wait(0.4)
+end
+
+-- No Clip + WalkSpeed boost, active while herb farming.
+local noClipEnabled = false
+local noClipOriginal = {}
+local cframeBoost = false
+local farmSpeed = Rere.State(30)
+local originalWalkSpeed = nil
+
+local function restoreNoClip()
+    for part, original in pairs(noClipOriginal) do
+        if part and part.Parent then
+            pcall(function() part.CanCollide = original end)
+        end
+    end
+    table.clear(noClipOriginal)
+end
+
+local function restoreWalkSpeed()
+    local char = player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum and originalWalkSpeed then
+        pcall(function() hum.WalkSpeed = originalWalkSpeed end)
+    end
+    originalWalkSpeed = nil
+end
+
+local function syncMovement()
+    local on = loops.Herbs or loops.Chests
+    if on and not noClipEnabled then
+        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        originalWalkSpeed = hum and hum.WalkSpeed or 16
+    end
+    noClipEnabled = on
+    cframeBoost = on
+    if not on then restoreWalkSpeed() end
+end
+
+runService.Heartbeat:Connect(function(dt)
+    if noClipEnabled then
+        local char = player.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if noClipOriginal[part] == nil then noClipOriginal[part] = part.CanCollide end
+                    if part.CanCollide then part.CanCollide = false end
+                end
+            end
+        end
+    elseif next(noClipOriginal) ~= nil then
+        restoreNoClip()
+    end
+
+    if cframeBoost then
+        local speed = math.clamp(farmSpeed.value, 0, 100)
+        if speed > 0 then
+            local char = player.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.WalkSpeed ~= speed then
+                pcall(function() hum.WalkSpeed = speed end)
+            end
+        end
+    end
+end)
+
+local function startHerbFarm()
+    loops.Herbs = true
+    syncMovement()
+    task.spawn(function()
+        while loops.Herbs do
+            local folder = findHerbFolder()
+            local selected = herbIndex.value
+            if not folder or not selected then
+                herbStatus = "Waiting for HerbSpots / selection"
+                task.wait(1)
+            else
+                local targets = {}
+                for _, c in ipairs(folder:GetChildren()) do
+                    if c.Name == selected then targets[#targets + 1] = c end
+                end
+                if #targets == 0 then
+                    herbStatus = "No '" .. selected .. "' spots - waiting"
+                    task.wait(1)
+                else
+                    for _, obj in ipairs(targets) do
+                        if not loops.Herbs then break end
+                        if not obj.Parent then continue end
+                        local pos = herbPosition(obj)
+                        if pos then
+                            herbStatus = "Walking to " .. selected
+                            if walkTo(pos) then
+                                herbStatus = "Picking " .. selected
+                                interactWith(obj)
+                            else
+                                herbStatus = "Could not reach " .. selected
+                            end
+                        end
+                    end
+                    task.wait(0.5)
+                end
+            end
+        end
+        syncMovement()
+        herbStatus = "Off"
+    end)
+end
+
+-- Chest Farm: walk to every chest in Workspace.ChestSpots and open its prompt.
+local function findChestFolder()
+    return workspace:FindFirstChild("ChestSpots") or workspace:FindFirstChild("ChestSpots", true)
+end
+
+local function startChestFarm()
+    loops.Chests = true
+    syncMovement()
+    task.spawn(function()
+        while loops.Chests do
+            local folder = findChestFolder()
+            if not folder then
+                chestStatus = "Waiting for ChestSpots"
+                task.wait(1)
+            else
+                local chests = folder:GetChildren()
+                if #chests == 0 then
+                    chestStatus = "No chests in ChestSpots"
+                    task.wait(1)
+                else
+                    for _, chest in ipairs(chests) do
+                        if not loops.Chests then break end
+                        if not chest.Parent then continue end
+                        local prompt = chest:FindFirstChildWhichIsA("ProximityPrompt", true)
+                        if prompt and not prompt.Enabled then
+                            chestStatus = chest.Name .. " on cooldown"
+                            continue
+                        end
+                        local pos = herbPosition(chest)
+                        if pos then
+                            chestStatus = "Walking to " .. chest.Name
+                            if walkTo(pos) then
+                                chestStatus = "Opening " .. chest.Name
+                                interactWith(chest)
+                                task.wait(0.3)
+                            else
+                                chestStatus = "Could not reach " .. chest.Name
+                            end
+                        end
+                    end
+                    task.wait(1)
+                end
+            end
+        end
+        syncMovement()
+        chestStatus = "Off"
+    end)
+end
+
+-- Instant Prompts: HoldDuration 0 on all current and future ProximityPrompts.
+local instantPrompts = false
+local instantConn = nil
+
+local function applyInstant(obj)
+    if obj:IsA("ProximityPrompt") then
+        pcall(function() obj.HoldDuration = 0 end)
+    end
+end
+
+local function setInstantPrompts(on)
+    instantPrompts = on
+    if on then
+        for _, v in ipairs(workspace:GetDescendants()) do applyInstant(v) end
+        if not instantConn then
+            instantConn = workspace.DescendantAdded:Connect(applyInstant)
+        end
+    elseif instantConn then
+        instantConn:Disconnect()
+        instantConn = nil
+    end
+end
+
+-- Auto Fight: teleport behind the nearest tagged NPC, spam right click, keep repositioning.
+local fightTag = "Bandit"
+
+local function findTarget(tag)
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local candidates = collectionService:GetTagged(tag)
+    if #candidates == 0 then
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("Model") and d.Name == tag then candidates[#candidates + 1] = d end
+        end
+    end
+    local best, bestDist
+    for _, inst in ipairs(candidates) do
+        local model = inst:IsA("Model") and inst or inst:FindFirstAncestorWhichIsA("Model")
+        if model then
+            local hum = model:FindFirstChildOfClass("Humanoid")
+            local part = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChildWhichIsA("BasePart")
+            if hum and hum.Health > 0 and part then
+                local d = (part.Position - hrp.Position).Magnitude
+                if not bestDist or d < bestDist then best, bestDist = model, d end
+            end
+        end
+    end
+    return best
+end
+
+local function startFight(tag)
+    loops.Fight = true
+    fightTag = tag
+    fightStatus = "Fighting " .. tag
+    task.spawn(function()
+        while loops.Fight do
+            local char = player.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if not hum or not hrp or hum.Health <= 0 then
+                fightStatus = "Dead - waiting for respawn"
+                task.wait(1)
+            else
+                local target = findTarget(fightTag)
+                if not target then
+                    fightStatus = "No " .. fightTag .. " found - waiting"
+                    task.wait(1)
+                else
+                    local ehum = target:FindFirstChildOfClass("Humanoid")
+                    local ehrp = target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart")
+                    if ehum and ehum.Health > 0 and ehrp then
+                        local behind = ehrp.Position - ehrp.CFrame.LookVector * 3
+                        pcall(function()
+                            hrp.CFrame = CFrame.new(behind, ehrp.Position)
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                        end)
+                        local cam = workspace.CurrentCamera
+                        if cam then
+                            pcall(function()
+                                cam.CFrame = CFrame.new(cam.CFrame.Position, ehrp.Position)
+                            end)
+                            local vp = cam.ViewportSize
+                            pcall(function()
+                                vim:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 1, true, game, 0)
+                                vim:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 1, false, game, 0)
+                            end)
+                        end
+                        fightStatus = "Fighting " .. fightTag .. " (" .. math.floor(ehum.Health) .. " HP)"
+                    end
+                    task.wait(0.15)
+                end
+            end
+        end
+        fightStatus = "Off"
+    end)
+end
+
+-- Auto Quest v2: QuestModule-driven panel, live state via remotes, auto accept + progress.
+local QUESTS, ORDER
+do
+    local ok, mod = pcall(function()
+        return require(game:GetService("ReplicatedStorage"):WaitForChild("QuestModule"))
+    end)
+    if ok and type(mod) == "table" and type(mod.Quests) == "table" then
+        QUESTS, ORDER = mod.Quests, mod.Order
+    end
+end
+if not QUESTS then
+    QUESTS = {
+        BanditTrouble = {name = "Bandit Trouble", giverName = "Garrick", requiredRealm = 1, objectiveType = "kill", targetTag = "Bandit", requiredCount = 5},
+        HerbalistsRequest = {name = "Herbalist's Request", giverName = "Mira", requiredRealm = 1, objectiveType = "collect", targetTag = "Herb", requiredCount = 8},
+        AlchemistsTrial = {name = "Alchemist's Trial", giverName = "Rowan", requiredRealm = 1, objectiveType = "craft", targetTag = "Pill", requiredCount = 3},
+        BanditCaptainHunt = {name = "Bandit Captain", giverName = "Kess", requiredRealm = 1, objectiveType = "kill", targetTag = "BanditCaptain", requiredCount = 1},
+        StillWaters = {name = "Still Waters", giverName = "Quest Board", requiredRealm = 2, objectiveType = "meditate", targetTag = "Seconds", requiredCount = 300},
+        WindBeneathTheBlade = {name = "Wind Beneath the Blade", giverName = "Quest Board", requiredRealm = 3, objectiveType = "fly", targetTag = "Sword", requiredCount = 10000},
+        OuterSectTrial = {name = "Outer Sect Trial", giverName = "Lei", requiredRealm = 5, objectiveType = "kill", targetTag = "OuterDisciple", requiredCount = 5},
+        OldRoots = {name = "Old Roots", giverName = "Yao", requiredRealm = 8, objectiveType = "collect", targetTag = "Herb100", requiredCount = 3},
+        InnerSectTrial = {name = "Inner Sect Trial", giverName = "Quest Board", requiredRealm = 10, objectiveType = "kill", targetTag = "InnerDisciple", requiredCount = 4},
+        PressureOfTheHeavens = {name = "Pressure of the Heavens", giverName = "Quest Board", requiredRealm = 12, objectiveType = "aura_kneel", targetTag = "OuterDisciple", requiredCount = 5},
+        CoreDiscipleHunt = {name = "Core Disciple Hunt", giverName = "Quest Board", requiredRealm = 15, objectiveType = "kill", targetTag = "CoreDisciple", requiredCount = 3},
+        WanderingElder = {name = "The Wandering Elder", giverName = "Quest Board", requiredRealm = 20, objectiveType = "kill", targetTag = "SectElder", requiredCount = 1},
+        PatientRiver = {name = "The Patient River", giverName = "Quest Board", requiredRealm = 11, objectiveType = "meditate", targetTag = "Seconds", requiredCount = 1200},
+        InnerSectPurge = {name = "Inner Sect Purge", giverName = "Huang", requiredRealm = 11, objectiveType = "kill", targetTag = "InnerDisciple", requiredCount = 8},
+        StormRider = {name = "Rider of the Storm", giverName = "Quest Board", requiredRealm = 14, objectiveType = "fly", targetTag = "Sword", requiredCount = 40000},
+        CoreBounty = {name = "Core Disciple Bounty", giverName = "Shen", requiredRealm = 14, objectiveType = "kill", targetTag = "CoreDisciple", requiredCount = 5},
+        MillenniumHerbs = {name = "Herbs of a Thousand Years", giverName = "Yao", requiredRealm = 17, objectiveType = "collect", targetTag = "Herb100", requiredCount = 6},
+        RivalBlood = {name = "Trial of Stillness", giverName = "Quest Board", requiredRealm = 17, objectiveType = "meditate", targetTag = "Seconds", requiredCount = 3600},
+        SovereignSlayer = {name = "Bane of the Sovereign", giverName = "Quest Board", requiredRealm = 20, objectiveType = "boss", targetTag = "WorldBoss", requiredCount = 1},
+        ElderDownfall = {name = "Downfall of the Elders", giverName = "Mei", requiredRealm = 20, objectiveType = "kill", targetTag = "SectElder", requiredCount = 3},
+        TenThousandBreaths = {name = "Ten Thousand Breaths", giverName = "Quest Board", requiredRealm = 23, objectiveType = "meditate", targetTag = "Seconds", requiredCount = 3600},
+        FirstDawnElixir = {name = "Elixir of the First Dawn", giverName = "Jun", requiredRealm = 23, objectiveType = "craft", targetTag = "Pill", requiredCount = 25},
+        HeavensTrial = {name = "Trial of Heaven", giverName = "Quest Board", requiredRealm = 26, objectiveType = "boss", targetTag = "WorldBoss", requiredCount = 2},
+        SilenceOfTheVoid = {name = "Silence of the Void", giverName = "Yao", requiredRealm = 26, objectiveType = "meditate", targetTag = "Seconds", requiredCount = 7200},
+        EchoesInTheStone = {name = "Echoes in the Stone", giverName = "Ku", requiredRealm = 15, objectiveType = "kill", targetTag = "DuneRaider", requiredCount = 12, hidden = true},
+        TheFrozenEcho = {name = "The Frozen Echo", giverName = "Ku", requiredRealm = 22, objectiveType = "kill", targetTag = "FrostElder", requiredCount = 2, hidden = true},
+    }
+end
+if not ORDER then
+    ORDER = {}
+    for id in pairs(QUESTS) do ORDER[#ORDER + 1] = id end
+    table.sort(ORDER)
+end
+
+local questState = {}
+local remoteRealm = nil
+local questStatus = "Waiting for quest data"
+local autoQuest = Rere.State(false)
+local NONE = "(none = all eligible)"
+local questPick = Rere.State(NONE)
+local questDumped = {}
+
+local GREEN = Color3.fromRGB(90, 255, 120)
+local RED = Color3.fromRGB(255, 90, 90)
+local GREY = Color3.fromRGB(170, 170, 170)
+
+local function isManual(def)
+    local t = def.objectiveType
+    return t == "craft" or t == "fly" or t == "aura_kneel"
+end
+
+local function currentRealm()
+    if type(remoteRealm) == "number" then return remoteRealm, "remote" end
+    local ls = player:FindFirstChild("leaderstats")
+    if ls then
+        for _, v in ipairs(ls:GetChildren()) do
+            if v:IsA("IntValue") or v:IsA("NumberValue") then
+                local k = v.Name:lower()
+                if k:find("realm") or k:find("level") or k:find("lvl") then
+                    return v.Value, "leaderstats." .. v.Name
+                end
+            end
+        end
+    end
+    for _, v in ipairs(player:GetChildren()) do
+        if v:IsA("IntValue") or v:IsA("NumberValue") then
+            local k = v.Name:lower()
+            if k:find("realm") or k:find("level") or k:find("lvl") then
+                return v.Value, "player." .. v.Name
+            end
+        end
+    end
+    for _, key in ipairs({"Realm", "realm", "Level", "level"}) do
+        local a = player:GetAttribute(key)
+        if type(a) == "number" then return a, "attribute " .. key end
+    end
+    return nil, "unknown"
+end
+
+local function questStatusOf(id)
+    local s = questState[id]
+    local entry = nil
+    if type(s) == "table" then
+        entry = s
+        s = s.status or s.state or (s.active and "active") or nil
+        if s == nil and entry.completed == true then s = "completed" end
+        if type(s) == "string" and s:lower() == "active" and type(entry.progress) == "number" then
+            local def = QUESTS[id]
+            if def and def.requiredCount and entry.progress >= def.requiredCount then
+                s = "completed"
+            end
+        end
+    end
+    if type(s) ~= "string" then return nil, entry end
+    s = s:lower()
+    if s == "complete" or s == "done" or s == "finished" or s == "ready" or s == "turnin" or s == "claim" then
+        s = "completed"
+    end
+    return s, entry
+end
+
+local function absorb(payload, depth)
+    if type(payload) ~= "table" or depth > 3 then return end
+    for k, v in pairs(payload) do
+        if type(k) == "string" then
+            local lk = k:lower()
+            if (lk == "realm" or lk == "playerrealm" or lk == "currentrealm") and type(v) == "number" then
+                remoteRealm = v
+            end
+            if QUESTS[k] then
+                questState[k] = v
+            elseif k:lower() == "quests" and type(v) == "table" then
+                for qk, qv in pairs(v) do
+                    if QUESTS[qk] then questState[qk] = qv end
+                end
+            end
+        end
+        if type(v) == "table" then
+            if type(v.id) == "string" and QUESTS[v.id] then
+                questState[v.id] = v
+            end
+            absorb(v, depth + 1)
+        end
+    end
+end
+
+local function dumpPayload(tag, payload)
+    if questDumped[tag] then return end
+    questDumped[tag] = true
+    local ok, json = pcall(function()
+        return game:GetService("HttpService"):JSONEncode(payload)
+    end)
+    if ok then
+        print("[Larpshin] " .. tag .. " payload: " .. json:sub(1, 1500))
+    else
+        print("[Larpshin] " .. tag .. " payload: (unencodable) " .. tostring(payload))
+    end
+end
+
+local function questRemote(name)
+    return events:FindFirstChild(name)
+end
+
+local function requestQuestData()
+    for _, name in ipairs({"RequestQuestData", "RequestQuestState"}) do
+        local r = questRemote(name)
+        if r then
+            task.spawn(function()
+                local ok, res = pcall(function()
+                    if r:IsA("RemoteFunction") then return r:InvokeServer() end
+                    r:FireServer()
+                    return nil
+                end)
+                if ok and res ~= nil then
+                    absorb(res, 0)
+                    dumpPayload(name, res)
+                end
+            end)
+        end
+    end
+end
+
+for _, name in ipairs({"QuestDataUpdate", "QuestProgressUpdate", "QuestUnlocked"}) do
+    local r = questRemote(name)
+    if r and r:IsA("RemoteEvent") then
+        r.OnClientEvent:Connect(function(...)
+            local args = {...}
+            for _, a in ipairs(args) do absorb(a, 0) end
+            dumpPayload(name, args)
+        end)
+    end
+end
+requestQuestData()
+
+local questNotice = ""
+for _, name in ipairs({"QuestNotice", "QuestRewardToast", "QuestRewardGranted"}) do
+    local r = questRemote(name)
+    if r and r:IsA("RemoteEvent") then
+        r.OnClientEvent:Connect(function(...)
+            local args = {...}
+            for _, a in ipairs(args) do
+                absorb(a, 0)
+                if type(a) == "string" then questNotice = a end
+            end
+            dumpPayload(name, args)
+            local parts = {}
+            for _, a in ipairs(args) do parts[#parts + 1] = tostring(a) end
+            print("[Larpshin] " .. name .. ": " .. table.concat(parts, " | "))
+        end)
+    end
+end
+
+do
+    local names = {}
+    for _, c in ipairs(events:GetChildren()) do
+        names[#names + 1] = c.Name .. "[" .. c.ClassName .. "]"
+    end
+    print("[Larpshin] CultivationEvents: " .. table.concat(names, ", "))
+    local ls = player:FindFirstChild("leaderstats")
+    if ls then
+        for _, v in ipairs(ls:GetChildren()) do
+            print("[Larpshin] leaderstat " .. v.Name .. " [" .. v.ClassName .. "] = " .. tostring(v.Value))
+        end
+    end
+    for _, v in ipairs(player:GetChildren()) do
+        if v:IsA("ValueBase") then
+            print("[Larpshin] player value " .. v.Name .. " [" .. v.ClassName .. "] = " .. tostring(v.Value))
+        end
+    end
+    for key, value in pairs(player:GetAttributes()) do
+        print("[Larpshin] player attr " .. key .. " = " .. tostring(value))
+    end
+    local realm, realmSource = currentRealm()
+    print("[Larpshin] realm now: " .. tostring(realm) .. " (" .. realmSource .. ")")
+end
+
+local function questVisible(id)
+    local def = QUESTS[id]
+    return def and (not def.hidden or questState[id] ~= nil)
+end
+
+local function questOptions()
+    local list = {NONE}
+    for _, id in ipairs(ORDER) do
+        if questVisible(id) then list[#list + 1] = QUESTS[id].name end
+    end
+    return list
+end
+
+local function questRow(id, realm)
+    local def = QUESTS[id]
+    if not def or not questVisible(id) then return nil end
+    local status, entry = questStatusOf(id)
+    local req = def.requiredRealm or 1
+    if status == "active" then
+        local label = def.name .. ": Active"
+        if entry and type(entry.progress) == "number" then
+            label = label .. string.format(" (%d/%d)", entry.progress, def.requiredCount or 0)
+        end
+        return label, GREEN
+    elseif status == "completed" then
+        return def.name .. ": Completed", GREY
+    elseif realm and realm < req then
+        return def.name .. ": Realm " .. req .. "+", RED
+    else
+        return def.name .. ": Eligible" .. (isManual(def) and " (manual)" or ""), GREEN
+    end
+end
+
+local function fireAccept(id)
+    local r = questRemote("AcceptQuest")
+    if not r then
+        questStatus = "AcceptQuest remote missing"
+        print("[Larpshin] AcceptQuest remote not found in CultivationEvents")
+        return
+    end
+    local ok, res = pcall(function()
+        if r:IsA("RemoteFunction") then return r:InvokeServer(id) end
+        r:FireServer(id)
+        return nil
+    end)
+    if not ok then
+        questStatus = "Accept error: " .. tostring(res)
+        print("[Larpshin] AcceptQuest error: " .. tostring(res))
+    else
+        questStatus = "Accepting " .. QUESTS[id].name
+        print("[Larpshin] AcceptQuest -> " .. id)
+        if res ~= nil then
+            absorb(res, 0)
+            dumpPayload("AcceptQuest", res)
+        end
+    end
+end
+
+local function findGiverPart(giverName)
+    local tries = {giverName, giverName:gsub(" ", ""), giverName:gsub(" ", "_")}
+    for _, name in ipairs(tries) do
+        local obj = workspace:FindFirstChild(name, true)
+        if obj then
+            if obj:IsA("BasePart") then return obj end
+            local part = obj:FindFirstChildWhichIsA("BasePart", true)
+            if part then return part end
+        end
+    end
+    return nil
+end
+
+local function turnInQuest(id)
+    local def = QUESTS[id]
+    local giver = def.giverName or ""
+    questStatus = "Turning in " .. def.name
+    print("[Larpshin] turn-in -> " .. id .. " (" .. giver .. ")")
+    local part = findGiverPart(giver)
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if part and hrp then
+        pcall(function()
+            hrp.CFrame = CFrame.new(part.Position + part.CFrame.LookVector * 3 + Vector3.new(0, 1, 0), part.Position)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+        end)
+        task.wait(0.3)
+    end
+    local open = questRemote("OpenQuestGiver")
+    if open then
+        pcall(function()
+            if open:IsA("RemoteFunction") then open:InvokeServer(id) else open:FireServer(id) end
+        end)
+        pcall(function()
+            if open:IsA("RemoteFunction") then open:InvokeServer(giver) else open:FireServer(giver) end
+        end)
+        task.wait(0.3)
+    end
+    fireAccept(id)
+end
+
+local lastAccept = {}
+local questDriven = {Qi = false, Herbs = false, Fight = false}
+local prevAuto = false
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        local on = autoQuest.value
+        if on ~= prevAuto then
+            prevAuto = on
+            if on then
+                questStatus = "Running"
+                requestQuestData()
+            else
+                if questDriven.Qi then loops.Qi = false; questDriven.Qi = false end
+                if questDriven.Herbs then
+                    loops.Herbs = false
+                    questDriven.Herbs = false
+                    syncMovement()
+                end
+                if questDriven.Fight then loops.Fight = false; questDriven.Fight = false end
+                questStatus = "Off"
+            end
+        end
+        if on then
+            local realm = currentRealm()
+            local picked = questPick.value
+            local combatActive = false
+            for _, id in ipairs(ORDER) do
+                local def = QUESTS[id]
+                if def and questVisible(id) and (picked == NONE or def.name == picked) then
+                    local status = questStatusOf(id)
+                    local req = def.requiredRealm or 1
+                    if status == "active" then
+                        if def.objectiveType == "meditate" and not loops.Qi then
+                            questDriven.Qi = true
+                            startLoop("Qi", function() events.StartMeditate:FireServer() end)
+                        elseif def.objectiveType == "collect" and def.targetTag == "Herb" and not loops.Herbs then
+                            refreshHerbs()
+                            if #herbNames > 0 then
+                                herbIndex.value = herbNames[1]
+                                questDriven.Herbs = true
+                                startHerbFarm()
+                            end
+                        elseif def.objectiveType == "kill" or def.objectiveType == "boss" then
+                            combatActive = true
+                            if not loops.Fight then
+                                questDriven.Fight = true
+                                startFight(def.targetTag or "Bandit")
+                            end
+                        end
+                    elseif status == "completed" then
+                        if lastAccept[id] == nil or os.clock() - lastAccept[id] > 3 then
+                            lastAccept[id] = os.clock()
+                            turnInQuest(id)
+                        end
+                    elseif (realm == nil or realm >= req)
+                        and (lastAccept[id] == nil or os.clock() - lastAccept[id] > 10) then
+                        lastAccept[id] = os.clock()
+                        fireAccept(id)
+                    end
+                end
+            end
+            if questDriven.Fight and not combatActive then
+                loops.Fight = false
+                questDriven.Fight = false
+            end
+        end
+    end
+end)
+
+local tabMain = Rere.State(true)
+local tabHerbs = Rere.State(false)
+local tabChests = Rere.State(false)
+local tabQuests = Rere.State(false)
+
+Rere:Connect(function()
+    Rere.SetNextWidgetID("Larpshin/Window")
+    Rere.Window({"Larpshin"}, window)
+    if window.isOpened.value and window.isUncollapsed.value then
+
+        Rere.TabBar()
+        Rere.SetNextWidgetID("Larpshin/TabMain")
+        Rere.Tab({"Main"}, {isOpened = tabMain})
+
+        Rere.SetNextWidgetID("Larpshin/AutoQi")
+        if Rere.Button({loops.Qi and "Stop Auto Qi" or "Auto Qi"}).clicked() then
+            if loops.Qi then
+                loops.Qi = false
+            else
+                startLoop("Qi", function()
+                    events.StartMeditate:FireServer()
+                end)
+            end
+        end
+
+        Rere.SetNextWidgetID("Larpshin/AutoBody")
+        if Rere.Button({loops.Body and "Stop Auto Body" or "Auto Body"}).clicked() then
+            if loops.Body then
+                loops.Body = false
+            else
+                startLoop("Body", function()
+                    events.StartPushup:FireServer()
+                end)
+            end
+        end
+
+        Rere.SetNextWidgetID("Larpshin/AutoBreakthrough")
+        if Rere.Button({loops.Breakthrough and "Stop Auto Breakthrough" or "Auto Breakthrough"}).clicked() then
+            if loops.Breakthrough then
+                loops.Breakthrough = false
+            else
+                startLoop("Breakthrough", function()
+                    events.Breakthrough:FireServer()
+                    events.BodyBreakthrough:FireServer()
+                end)
+            end
+        end
+
+        Rere.SetNextWidgetID("Larpshin/AutoPerfect")
+        if Rere.Button({loops.Perfect and "Stop Auto Perfect" or "Auto Perfect"}).clicked() then
+            loops.Perfect = not loops.Perfect
+            if not loops.Perfect then
+                perfectStatus = "Off"
+                table.clear(promptState)
+            end
+        end
+        Rere.SetNextWidgetID("Larpshin/PerfectOffset")
+        Rere.SliderNum({"Perfect Offset", 10, -200, 300, "%d ms"}, {number = perfectOffsetMs})
+        Rere.SetNextWidgetID("Larpshin/PerfectStatus")
+        Rere.TextWrapped({"Auto Perfect: " .. perfectStatus})
+
+        Rere.SetNextWidgetID("Larpshin/InstantPrompts")
+        if Rere.Button({instantPrompts and "Instant Prompts: ON" or "Instant Prompts: OFF"}).clicked() then
+            setInstantPrompts(not instantPrompts)
+        end
+
+        Rere.SetNextWidgetID("Larpshin/AutoFight")
+        if Rere.Button({loops.Fight and "Stop Auto Fight" or "Auto Fight (Bandit)"}).clicked() then
+            if loops.Fight then
+                loops.Fight = false
+            else
+                startFight("Bandit")
+            end
+        end
+        Rere.SetNextWidgetID("Larpshin/FightStatus")
+        Rere.TextWrapped({"Fight: " .. fightStatus})
+
+        Rere.End() -- TabMain
+
+        Rere.SetNextWidgetID("Larpshin/TabHerbs")
+        Rere.Tab({"Herbs"}, {isOpened = tabHerbs})
+        Rere.SetNextWidgetID("Larpshin/HerbsSep")
+        Rere.SeparatorText({"Herb Farm"})
+
+        if #herbNames == 0 then
+            Rere.SetNextWidgetID("Larpshin/HerbsEmpty")
+            Rere.TextWrapped({"No herbs found in HerbSpots - press Refresh"})
+        else
+            Rere.SetNextWidgetID("Larpshin/HerbCombo")
+            local combo = Rere.ComboArray({"Herb"}, {index = herbIndex}, herbNames)
+            if combo.changed() then
+                herbStatus = "Selected: " .. tostring(herbIndex.value)
+            end
+        end
+
+        Rere.SetNextWidgetID("Larpshin/HerbRefresh")
+        if Rere.Button({"Refresh Herbs"}).clicked() then refreshHerbs() end
+
+        Rere.SetNextWidgetID("Larpshin/HerbFarm")
+        if Rere.Button({loops.Herbs and "Stop Herb Farm" or "Start Herb Farm"}).clicked() then
+            if loops.Herbs then
+                loops.Herbs = false
+                syncMovement()
+            else
+                refreshHerbs()
+                startHerbFarm()
+            end
+        end
+
+        Rere.SetNextWidgetID("Larpshin/FarmSpeed")
+        Rere.SliderNum({"Farm Speed", 1, 0, 100, "%d studs/s"}, {number = farmSpeed})
+
+        Rere.SetNextWidgetID("Larpshin/HerbStatus")
+        Rere.TextWrapped({"Herbs: " .. herbStatus})
+        Rere.End() -- TabHerbs
+
+        Rere.SetNextWidgetID("Larpshin/TabChests")
+        Rere.Tab({"Chests"}, {isOpened = tabChests})
+        Rere.SetNextWidgetID("Larpshin/ChestsSep")
+        Rere.SeparatorText({"Chest Farm"})
+
+        Rere.SetNextWidgetID("Larpshin/ChestFarm")
+        if Rere.Button({loops.Chests and "Stop Chest Farm" or "Start Chest Farm"}).clicked() then
+            if loops.Chests then
+                loops.Chests = false
+                syncMovement()
+            else
+                startChestFarm()
+            end
+        end
+
+        Rere.SetNextWidgetID("Larpshin/ChestStatus")
+        Rere.TextWrapped({"Chests: " .. chestStatus})
+        Rere.End() -- TabChests
+
+        Rere.SetNextWidgetID("Larpshin/TabQuests")
+        Rere.Tab({"Auto Quest"}, {isOpened = tabQuests})
+        Rere.SetNextWidgetID("Larpshin/QuestsSep")
+        Rere.SeparatorText({"Quests: green = doable, red = realm too high"})
+
+        Rere.SetNextWidgetID("Larpshin/AutoQuestCheck")
+        Rere.Checkbox({"Auto Quest"}, {isChecked = autoQuest})
+
+        Rere.SetNextWidgetID("Larpshin/QuestCombo")
+        Rere.ComboArray({"Quests"}, {index = questPick}, questOptions())
+
+        local realm, realmSource = currentRealm()
+        Rere.SetNextWidgetID("Larpshin/QuestStatus")
+        Rere.TextWrapped({string.format("Realm: %s (%s) | %s", tostring(realm), realmSource, questStatus)})
+        if questNotice ~= "" then
+            Rere.SetNextWidgetID("Larpshin/QuestNotice")
+            Rere.TextWrapped({"Server: " .. questNotice})
+        end
+
+        local row = 0
+        for _, id in ipairs(ORDER) do
+            local text, color = questRow(id, realm)
+            if text then
+                row += 1
+                Rere.SetNextWidgetID("Larpshin/QuestRow" .. row)
+                Rere.TextColored({text, color})
+            end
+        end
+        Rere.End() -- TabQuests
+        Rere.End() -- TabBar
+
+    end
+    Rere.End() -- Window
+end)
